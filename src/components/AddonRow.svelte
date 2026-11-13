@@ -30,7 +30,13 @@
   </div>
 
   <div class="action">
-    <InstallButton modId={addon.id} name={addon.name} available={addon.latestFileId !== null} />
+    <InstallButton
+      modId={addon.id}
+      name={addon.name}
+      available={addon.latestFileId !== null}
+      allowDistribution={addon.allowDistribution}
+      websiteUrl={addon.websiteUrl}
+    />
   </div>
 </div>
 

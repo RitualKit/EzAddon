@@ -16,7 +16,9 @@ A small, fast Windows app for finding and installing **World of Warcraft: Foreve
 - Sort by popularity, downloads, last updated, newest or name.
 - Install with one click. Required dependencies are installed automatically.
 - See what you've installed, check for updates, update one addon or all of them, and uninstall.
+- **Scan for addons** finds addons you installed by hand or with another manager, identifies the exact version on CurseForge, and adds them to My Addons for update checks.
 - Close to the system tray. EzAddon checks for addon updates in the background and shows a Windows notification when there are new ones.
+- EzAddon updates itself: new versions install automatically when it starts.
 - It only shows WoW Forever. Retail, Classic and other games are hidden.
 
 It's built with [Tauri](https://tauri.app) and Svelte, so it uses Windows' built-in WebView2 instead of bundling a browser. The installer is a few MB and the app uses far less memory than Electron-based managers. It does nothing in the background while it's idle.
@@ -62,6 +64,21 @@ EzAddon is built to stay light:
 
   <sub>*Working set also counts DLLs shared with Edge and Windows, so it overstates the real cost.</sub>
 
+## Website-only addons
+
+About a third of WoW Forever addons on CurseForge are set by their authors to allow downloads **only from the CurseForge website**. CurseForge enforces this for third-party apps like EzAddon, and in some categories (Garrison, Demon Hunters, Bags & Inventory…) it's most of them.
+
+- These addons show a **CurseForge ↗** button instead of Install. **Hide website-only** in Browse removes them from the list.
+- To use one, download it from the website and extract it into your AddOns folder. Then run **My Addons → Scan for Addons**, and EzAddon will track it and show when updates are out (with an **Update on CurseForge** link).
+
+## Scanning for addons
+
+**My Addons → Scan for Addons** looks at every folder in your AddOns folder that EzAddon doesn't already manage:
+
+1. It computes each folder's fingerprint the same way CurseForge does (every file the addon's `.toc` loads, including `_Forever.toc` variants) and asks CurseForge which addon and exact file it is. Addons with a missing or extra module are still recognized.
+2. If a folder isn't recognized but its `.toc` declares `## X-Curse-Project-ID`, it's added with an unknown version. Updating it once brings it to the latest version.
+3. Anything else (your own tweaks, edited addons, Blizzard folders) is listed and left alone.
+
 ## Troubleshooting: API key not accepted, or search doesn't work
 
 EzAddon tests your key with two requests: one any valid key may make, and the World of Warcraft addon search it actually needs. The result appears under the key field. You can run it again any time with **Settings → Test key**.
@@ -74,6 +91,10 @@ EzAddon tests your key with two requests: one any valid key may make, and the Wo
 - **No response:** check your internet connection, firewall, antivirus or proxy.
 
 If the check fails you can still click **Save anyway** and browse; any error then shows CurseForge's exact answer. **Copy details** copies the full check (never the key itself) so you can include it in a bug report.
+
+## EzAddon updates
+
+EzAddon checks GitHub for a new version shortly after it starts and every 6 hours. With **Settings → Update EzAddon automatically** on (the default), a new version found at startup installs right away and EzAddon restarts. Otherwise a banner offers **Restart and update**. Updates are signed, and EzAddon only installs builds signed with the project's key.
 
 ## System tray
 
@@ -150,6 +171,12 @@ CI (`.github/workflows/build.yml`) does the following on every push:
 
 Pushing a `v*` tag also creates a versioned release.
 
+Each CI build is numbered `0.1.<run number>`. For EzAddon's self-update, the repository needs the updater signing key as an Actions secret:
+- `TAURI_SIGNING_PRIVATE_KEY` holds the private key's file contents. Its public key is in `src-tauri/tauri.conf.json` under `plugins.updater.pubkey`.
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` is optional; leave it unset if the key has no password.
+
+With the secret set, the build signs the installer and publishes `latest.json` next to it in the **latest** release. Without it, builds still work but can't be delivered as automatic updates.
+
 ### Layout
 
 | Path | What it is |
@@ -158,6 +185,9 @@ Pushing a `v*` tag also creates a versioned release.
 | `src-tauri/src/installer.rs` | dependency planning, download, safe unzip, atomic folder swap |
 | `src-tauri/src/manifest.rs` | the installed-addons manifest |
 | `src-tauri/src/wow.rs` | WoW Forever folder detection |
+| `src-tauri/src/scanner.rs` | addon scan: CurseForge-compatible folder fingerprints and matching |
+| `src-tauri/src/app_update.rs` | EzAddon's own signed auto-update |
+| `src-tauri/src/tray.rs` | system tray and background update checks |
 | `src-tauri/src/settings.rs` | settings and API key storage |
 | `src-tauri/src/lib.rs` | Tauri commands |
 | `src/` | Svelte 5 UI. `src/lib/mock.ts` is the browser-only mock backend |

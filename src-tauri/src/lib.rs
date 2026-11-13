@@ -1,8 +1,10 @@
+mod app_update;
 mod curseforge;
 mod error;
 mod webview_memory;
 mod installer;
 mod manifest;
+mod scanner;
 mod settings;
 mod tray;
 mod wow;
@@ -224,6 +226,7 @@ struct SettingsView {
     has_api_key: bool,
     close_to_tray: bool,
     notify_updates: bool,
+    auto_update_app: bool,
 }
 
 fn settings_view(s: &Settings) -> SettingsView {
@@ -235,6 +238,7 @@ fn settings_view(s: &Settings) -> SettingsView {
         has_api_key: settings::get_api_key(s).is_some(),
         close_to_tray: s.close_to_tray,
         notify_updates: s.notify_updates,
+        auto_update_app: s.auto_update_app,
     }
 }
 
@@ -251,6 +255,7 @@ fn save_settings(
     version_type_override: Option<u32>,
     close_to_tray: Option<bool>,
     notify_updates: Option<bool>,
+    auto_update_app: Option<bool>,
 ) -> AppResult<SettingsView> {
     let mut s = state.settings.lock().unwrap();
     if let Some(v) = close_to_tray {
@@ -258,6 +263,9 @@ fn save_settings(
     }
     if let Some(v) = notify_updates {
         s.notify_updates = v;
+    }
+    if let Some(v) = auto_update_app {
+        s.auto_update_app = v;
     }
     s.addons_path = addons_path
         .map(|p| p.trim().to_string())
@@ -656,6 +664,23 @@ async fn uninstall_addon(state: State<'_, AppState>, mod_id: u32) -> AppResult<V
     Ok(manifest.entries(&addons))
 }
 
+/// Finds addons installed outside EzAddon and adds the ones CurseForge knows.
+#[tauri::command]
+async fn scan_addons(state: State<'_, AppState>) -> AppResult<scanner::ScanReport> {
+    let _guard = state.install_lock.lock().await;
+    let cf = state.client()?;
+    let addons = state.addons_path()?;
+    let type_id = state.forever_type(&cf).await?;
+    let channel = state.settings().release_channel;
+    let mut manifest = Manifest::load(&state.manifest_file());
+    let report = scanner::scan(&cf, &addons, &mut manifest, type_id, channel).await?;
+    if !report.added.is_empty() {
+        manifest.save(&state.manifest_file())?;
+        state.details.lock().unwrap().clear();
+    }
+    Ok(report)
+}
+
 #[tauri::command]
 fn list_installed(state: State<'_, AppState>) -> AppResult<Vec<InstalledAddon>> {
     let Ok(addons) = state.addons_path() else {
@@ -674,6 +699,8 @@ pub(crate) struct UpdateInfo {
     mod_id: u32,
     latest_file_id: u32,
     latest_file_name: String,
+    /// False when the author only allows downloads from the CurseForge website.
+    can_install: bool,
 }
 
 #[tauri::command]
@@ -701,6 +728,7 @@ pub(crate) async fn compute_updates(state: &AppState) -> AppResult<Vec<UpdateInf
                         mod_id: m.id,
                         latest_file_id: idx.file_id,
                         latest_file_name: idx.filename.clone(),
+                        can_install: m.allow_mod_distribution != Some(false),
                     });
                 }
             }
@@ -715,6 +743,7 @@ pub fn run() {
         // Must be first: a second launch just reopens the running instance.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_main(app)))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -770,6 +799,7 @@ pub fn run() {
             if let Err(e) = tray::setup(app) {
                 eprintln!("system tray unavailable: {e}");
             }
+            app_update::start_background_checks(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -792,7 +822,10 @@ pub fn run() {
             install_addon,
             uninstall_addon,
             list_installed,
+            scan_addons,
             check_updates,
+            app_update::check_app_update,
+            app_update::install_app_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building EzAddon");

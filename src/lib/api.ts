@@ -11,6 +11,7 @@ export interface SettingsView {
   hasApiKey: boolean;
   closeToTray: boolean;
   notifyUpdates: boolean;
+  autoUpdateApp: boolean;
 }
 
 export interface CategoryNode {
@@ -32,6 +33,8 @@ export interface AddonSummary {
   latestFileId: number | null;
   gameVersion: string | null;
   dateModified: string | null;
+  /** False when the author only allows downloads from the CurseForge website. */
+  allowDistribution: boolean;
 }
 
 export interface SearchPage {
@@ -94,7 +97,28 @@ export interface UpdateInfo {
   modId: number;
   latestFileId: number;
   latestFileName: string;
+  /** False when the update has to be downloaded from the CurseForge website. */
+  canInstall: boolean;
 }
+
+export interface ScanReport {
+  added: InstalledAddon[];
+  unmatched: string[];
+  alreadyManaged: number;
+  scanned: number;
+}
+
+export interface AppUpdate {
+  version: string;
+  currentVersion: string;
+  notes: string | null;
+}
+
+/** Events about EzAddon's own updates. */
+export type AppUpdateEvent =
+  | { state: "available"; version: string }
+  | { state: "installing"; version: string }
+  | { state: "error"; message: string };
 
 export interface Progress {
   modId: number;
@@ -146,6 +170,7 @@ export const SORTS = [
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 type Listen = (cb: (p: Progress) => void) => Promise<UnlistenFn>;
 type ListenUpdates = (cb: (u: UpdateInfo[]) => void) => Promise<UnlistenFn>;
+type ListenAppUpdate = (cb: (e: AppUpdateEvent) => void, progress: (received: number, total: number | null) => void) => Promise<UnlistenFn>;
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -153,6 +178,8 @@ let backend: Promise<{
   invoke: Invoke;
   listenProgress: Listen;
   listenUpdates: ListenUpdates;
+  listenAppUpdate: ListenAppUpdate;
+  appVersion: () => Promise<string>;
   openUrl: (u: string) => Promise<void>;
   pickFolder: () => Promise<string | null>;
 }>;
@@ -163,9 +190,10 @@ if ((import.meta.env.DEV || import.meta.env.VITE_MOCK === "1") && !isTauri) {
   backend = import("./mock").then((m) => m.mockBackend);
 } else {
   backend = (async () => {
-    const [{ invoke }, { listen }, opener, dialog] = await Promise.all([
+    const [{ invoke }, { listen }, appApi, opener, dialog] = await Promise.all([
       import("@tauri-apps/api/core"),
       import("@tauri-apps/api/event"),
+      import("@tauri-apps/api/app"),
       import("@tauri-apps/plugin-opener"),
       import("@tauri-apps/plugin-dialog"),
     ]);
@@ -173,6 +201,17 @@ if ((import.meta.env.DEV || import.meta.env.VITE_MOCK === "1") && !isTauri) {
       invoke: invoke as Invoke,
       listenProgress: ((cb) => listen<Progress>("install-progress", (e) => cb(e.payload))) as Listen,
       listenUpdates: ((cb) => listen<UpdateInfo[]>("updates-available", (e) => cb(e.payload))) as ListenUpdates,
+      listenAppUpdate: (async (cb, progress) => {
+        const a = await listen<AppUpdateEvent>("app-update", (e) => cb(e.payload));
+        const b = await listen<{ received: number; total: number | null }>("app-update-progress", (e) =>
+          progress(e.payload.received, e.payload.total),
+        );
+        return () => {
+          a();
+          b();
+        };
+      }) as ListenAppUpdate,
+      appVersion: () => appApi.getVersion(),
       openUrl: (u: string) => opener.openUrl(u),
       pickFolder: async () => {
         const r = await dialog.open({ directory: true, multiple: false, title: "Choose your World of Warcraft folder" });
@@ -204,8 +243,16 @@ export const api = {
     versionTypeOverride: number | null,
     closeToTray?: boolean,
     notifyUpdates?: boolean,
+    autoUpdateApp?: boolean,
   ) =>
-    call<SettingsView>("save_settings", { addonsPath, releaseChannel, versionTypeOverride, closeToTray, notifyUpdates }),
+    call<SettingsView>("save_settings", {
+      addonsPath,
+      releaseChannel,
+      versionTypeOverride,
+      closeToTray,
+      notifyUpdates,
+      autoUpdateApp,
+    }),
   /** Tests and saves the key. With force, saves even if CurseForge refuses it. */
   setApiKey: (key: string, force = false) => call<KeySaveResult>("set_api_key", { key, force }),
   testApiKey: () => call<KeyCheck>("test_api_key"),
@@ -219,6 +266,13 @@ export const api = {
   uninstall: (modId: number) => call<InstalledAddon[]>("uninstall_addon", { modId }),
   listInstalled: () => call<InstalledAddon[]>("list_installed"),
   checkUpdates: () => call<UpdateInfo[]>("check_updates"),
+  /** Finds addons installed outside EzAddon and adds those CurseForge knows. */
+  scanAddons: () => call<ScanReport>("scan_addons"),
+  checkAppUpdate: () => call<AppUpdate | null>("check_app_update"),
+  installAppUpdate: () => call<boolean>("install_app_update"),
+  onAppUpdate: async (cb: (e: AppUpdateEvent) => void, progress: (received: number, total: number | null) => void) =>
+    (await backend).listenAppUpdate(cb, progress),
+  appVersion: async () => (await backend).appVersion(),
   onProgress: async (cb: (p: Progress) => void) => (await backend).listenProgress(cb),
   /** Results of the backend's background update checks. */
   onUpdates: async (cb: (u: UpdateInfo[]) => void) => (await backend).listenUpdates(cb),

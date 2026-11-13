@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { formatDate } from "../lib/api";
-  import { app, checkUpdates, refreshInstalled, uninstall, updateAll } from "../lib/state.svelte";
+  import { app, checkUpdates, refreshInstalled, scanAddons, uninstall, updateAll } from "../lib/state.svelte";
   import InstallButton from "./InstallButton.svelte";
   import Icon from "./Icon.svelte";
 
@@ -9,11 +9,21 @@
   let updatingAll = $state(false);
   let filter = $state("");
   let confirmId = $state<number | null>(null);
+  let scanning = $state(false);
+  let showUnmatched = $state(false);
 
   const list = $derived(
     app.installed.filter((a) => a.name.toLowerCase().includes(filter.trim().toLowerCase())),
   );
-  const updateCount = $derived(Object.keys(app.updates).length);
+  // "Update All" only counts updates EzAddon can install itself.
+  const updateCount = $derived(Object.keys(app.updates).filter((id) => !app.updateBlocked[Number(id)]).length);
+
+  async function scan() {
+    scanning = true;
+    showUnmatched = false;
+    await scanAddons();
+    scanning = false;
+  }
 
   async function check() {
     checking = true;
@@ -46,17 +56,42 @@
     <button class="outline" onclick={check} disabled={checking || !app.installed.length}>
       {#if checking}<span class="spinner"></span>{:else}<Icon name="refresh" size={15} />{/if} Check for Updates
     </button>
+    <button class="outline" onclick={scan} disabled={scanning} title="Find addons installed outside EzAddon and add the ones found on CurseForge">
+      {#if scanning}<span class="spinner"></span>{:else}<Icon name="search" size={15} />{/if} Scan for Addons
+    </button>
     <button class="primary" onclick={doUpdateAll} disabled={!updateCount || updatingAll}>
       {#if updatingAll}<span class="spinner"></span>{/if} Update All{updateCount ? ` (${updateCount})` : ""}
     </button>
   </div>
 
   <div class="table scroll">
+    {#if app.lastScan && (app.lastScan.added.length || app.lastScan.unmatched.length)}
+      {@const r = app.lastScan}
+      <div class="scan-result">
+        <div class="row">
+          <span class="grow">
+            Scanned {r.scanned} addon folder{r.scanned === 1 ? "" : "s"}:
+            <strong>{r.added.length} added</strong>{#if r.unmatched.length}, {r.unmatched.length} not found on CurseForge{/if}.
+          </span>
+          {#if r.unmatched.length}
+            <button class="ghost small" onclick={() => (showUnmatched = !showUnmatched)}>{showUnmatched ? "Hide" : "Show"} not found</button>
+          {/if}
+          <button class="icon" title="Dismiss" onclick={() => (app.lastScan = null)}><Icon name="close" size={14} /></button>
+        </div>
+        {#if showUnmatched}
+          <p class="dim small unmatched">{r.unmatched.join(", ")}</p>
+          <p class="dim small">These folders aren't on CurseForge, were changed by hand, or are parts of another addon. EzAddon leaves them alone.</p>
+        {/if}
+      </div>
+    {/if}
     {#if !app.installed.length}
       <div class="empty">
         <Icon name="puzzle" size={40} stroke={1.5} />
-        <p>You haven't installed any addons with EzAddon yet.</p>
-        <p class="dim small">Head to the Browse tab to find some.</p>
+        <p>EzAddon isn't tracking any addons yet.</p>
+        <p class="dim small">Already have addons installed? Scan for them to get update checks.</p>
+        <button class="primary scan-cta" onclick={scan} disabled={scanning}>
+          {#if scanning}<span class="spinner"></span>{:else}<Icon name="search" size={15} />{/if} Scan for Addons
+        </button>
       </div>
     {:else}
       <div class="th">
@@ -75,8 +110,10 @@
             </span>
           </button>
           <span>
-            {#if a.modId in app.updates}
-              <span class="status upd">Update available</span>
+            {#if a.modId in app.updates && app.updateBlocked[a.modId]}
+              <span class="status upd" title="The author only allows downloads from the CurseForge website">Update on CurseForge</span>
+            {:else if a.modId in app.updates}
+              <span class="status upd">{a.fileId ? "Update available" : "Version unknown, update to track it"}</span>
             {:else}
               <span class="status ok"><Icon name="check" size={13} /> Up to date</span>
             {/if}
@@ -84,7 +121,7 @@
           </span>
           <span class="dim small">{formatDate(a.installedAt)}</span>
           <span class="actions">
-            {#if a.modId in app.updates}<InstallButton modId={a.modId} name={a.name} />{/if}
+            {#if a.modId in app.updates}<InstallButton modId={a.modId} name={a.name} websiteUrl={a.websiteUrl} />{/if}
             {#if confirmId === a.modId}
               <button class="danger outline" onclick={() => { confirmId = null; uninstall(a.modId, a.name); }}>Remove?</button>
               <button class="icon" title="Cancel" onclick={() => (confirmId = null)}><Icon name="close" size={15} /></button>
@@ -129,6 +166,9 @@
   .status.ok { color: var(--good); }
   .status.upd { color: var(--accent); }
   .actions { display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
+  .scan-result { margin: 4px 0 10px; padding: 10px 14px; border-radius: var(--radius); background: var(--panel); border-left: 3px solid var(--accent); }
+  .unmatched { margin: 8px 0 4px; overflow-wrap: anywhere; user-select: text; }
+  .scan-cta { margin-top: 16px; }
   .empty { display: flex; flex-direction: column; align-items: center; padding: 70px 16px; color: var(--dim); text-align: center; }
   .empty p { margin: 8px 0 0; color: var(--muted); }
   .empty p.dim { color: var(--dim); margin-top: 2px; }

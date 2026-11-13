@@ -55,8 +55,24 @@ jobs:
       - name: Rust tests (Windows)
         working-directory: src-tauri
         run: cargo test
+      # Each build gets a higher version (0.1.<run number>) so installed copies
+      # can tell it's newer. With the signing key secret set, the installer is
+      # also signed for EzAddon's built-in updater.
       - name: Build installers
-        run: npx tauri build
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          VERSION="0.1.${{ github.run_number }}"
+          echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "SIGNED=true" >> "$GITHUB_ENV"
+            npx tauri build --config "{\"version\":\"$VERSION\",\"bundle\":{\"createUpdaterArtifacts\":true}}"
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set, so this build can't be delivered through EzAddon's auto-update."
+            npx tauri build --config "{\"version\":\"$VERSION\"}"
+          fi
       - name: Measure memory and CPU use
         continue-on-error: true
         shell: pwsh
@@ -67,6 +83,25 @@ jobs:
           mkdir -p out
           cp src-tauri/target/release/bundle/nsis/*-setup.exe out/EzAddon-setup.exe
           cp src-tauri/target/release/bundle/msi/*.msi out/EzAddon.msi
+      # The update manifest EzAddon checks. It points at the stable-named
+      # installer in the "latest" release, with the installer's signature.
+      - name: Write update manifest
+        if: env.SIGNED == 'true'
+        shell: bash
+        run: |
+          SIG_FILE=$(ls src-tauri/target/release/bundle/nsis/*-setup.exe.sig)
+          node -e '
+            const fs = require("fs");
+            const [sigFile, version, url] = process.argv.slice(1);
+            const manifest = {
+              version,
+              notes: "See the release notes on GitHub.",
+              pub_date: new Date().toISOString(),
+              platforms: { "windows-x86_64": { signature: fs.readFileSync(sigFile, "utf8").trim(), url } },
+            };
+            fs.writeFileSync("out/latest.json", JSON.stringify(manifest, null, 2));
+          ' "$SIG_FILE" "$APP_VERSION" "https://github.com/${{ github.repository }}/releases/download/latest/EzAddon-setup.exe"
+          cat out/latest.json
       - uses: actions/upload-artifact@v4
         with:
           name: EzAddon-windows-installers
@@ -83,9 +118,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest --cleanup-tag --yes || true
-          gh release create latest out/EzAddon-setup.exe out/EzAddon.msi \
-            --target "${{ github.sha }}" --prerelease --title "Latest build" \
-            --notes "Automatic build of ${{ github.sha }}. Download **EzAddon-setup.exe** to install."
+          FILES="out/EzAddon-setup.exe out/EzAddon.msi"
+          [ -f out/latest.json ] && FILES="$FILES out/latest.json"
+          gh release create latest $FILES \
+            --target "${{ github.sha }}" --prerelease --title "Latest build (v$APP_VERSION)" \
+            --notes "Automatic build v$APP_VERSION of ${{ github.sha }}. Download **EzAddon-setup.exe** to install. Installed copies update themselves."
       - name: Attach installers to the versioned release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2

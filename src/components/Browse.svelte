@@ -19,6 +19,26 @@
   let error = $state<string | null>(null);
   let scroller: HTMLDivElement | undefined = $state();
 
+  // Hide addons whose authors only allow downloads from the CurseForge site.
+  // Remembered per machine; a convenience, so storage failures are ignored.
+  let hideBlocked = $state(readPref());
+  function readPref(): boolean {
+    try {
+      return localStorage.getItem("ezaddon.hideWebsiteOnly") === "1";
+    } catch {
+      return false;
+    }
+  }
+  function togglePref() {
+    try {
+      localStorage.setItem("ezaddon.hideWebsiteOnly", hideBlocked ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }
+  const shown = $derived(hideBlocked ? results.filter((a) => a.allowDistribution) : results);
+  const hiddenCount = $derived(results.length - shown.length);
+
   let seq = 0;
   let debounce: ReturnType<typeof setTimeout> | undefined;
 
@@ -106,6 +126,10 @@
           onkeydown={(e) => e.key === "Enter" && (clearTimeout(debounce), load(true))}
         />
       </div>
+      <label class="toggle row" title="Some authors only allow downloads from the CurseForge website">
+        <input type="checkbox" bind:checked={hideBlocked} onchange={togglePref} />
+        <span class="small">Hide website-only</span>
+      </label>
       <label class="sort row">
         <span class="dim small">Sort by</span>
         <select bind:value={sort} onchange={() => load(true)}>
@@ -116,7 +140,11 @@
 
     <div class="heading row">
       <h2 class="grow ellipsis">{categoryName ?? "All Addons"}</h2>
-      {#if !loading || results.length}<span class="dim small">{formatCount(total)} results</span>{/if}
+      {#if !loading || results.length}
+        <span class="dim small">
+          {formatCount(total)} results{#if hiddenCount} · {hiddenCount} website-only hidden{/if}
+        </span>
+      {/if}
     </div>
 
     <div class="results scroll" bind:this={scroller}>
@@ -125,11 +153,18 @@
           <p>{error}</p>
           <button class="outline" onclick={() => load(true)}>Try again</button>
         </div>
-      {:else if !loading && results.length === 0}
-        <div class="empty muted">No WoW Forever addons match your search.</div>
+      {:else if !loading && shown.length === 0}
+        <div class="empty muted">
+          {#if hiddenCount}
+            <p>All {hiddenCount} results so far are website-only.</p>
+            {#if hasMore}<button class="outline" onclick={() => load(false)}>Load more</button>{/if}
+          {:else}
+            No WoW Forever addons match your search.
+          {/if}
+        </div>
       {:else}
         <div class="list">
-          {#each results as a (a.id)}<AddonRow addon={a} />{/each}
+          {#each shown as a (a.id)}<AddonRow addon={a} />{/each}
         </div>
         <div class="more">
           {#if loading}
@@ -160,6 +195,8 @@
   .search input { width: 100%; padding-left: 36px; height: 38px; }
   .icon-in { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--dim); }
   .sort select { height: 38px; min-width: 150px; }
+  .toggle { color: var(--muted); cursor: pointer; white-space: nowrap; }
+  .toggle input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; cursor: pointer; }
   .heading { padding: 14px 24px 10px; }
   .heading h2 { font-size: 17px; }
   .results { flex: 1; padding: 0 24px 20px; }

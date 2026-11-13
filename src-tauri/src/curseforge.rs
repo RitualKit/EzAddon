@@ -19,6 +19,18 @@ pub const MAX_SEARCH_WINDOW: u32 = 10_000;
 pub const RELATION_REQUIRED: u8 = 3;
 
 // ---------- API models (only the fields EzAddon uses) ----------
+//
+// CurseForge sometimes sends `null` for fields that are normally strings or
+// lists. `nn` turns those into empty values so one odd addon can't make a
+// whole page of results fail to load.
+
+fn nn<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
 
 #[derive(Debug, Clone, Deserialize)]
 struct Envelope<T> {
@@ -34,18 +46,51 @@ pub struct Pagination {
     pub total_count: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// A page of results. Items are parsed one by one, and any that don't match
+/// the expected shape are skipped instead of failing the whole page.
+#[derive(Debug, Clone)]
 struct Paged<T> {
     data: Vec<T>,
-    #[serde(default)]
     pagination: Pagination,
+}
+
+impl<'de, T: DeserializeOwned> Deserialize<'de> for Paged<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            #[serde(default, deserialize_with = "nn")]
+            data: Vec<serde_json::Value>,
+            #[serde(default, deserialize_with = "nn")]
+            pagination: Pagination,
+        }
+        let raw = Raw::deserialize(d)?;
+        let mut skipped = 0;
+        let data = raw
+            .data
+            .into_iter()
+            .filter_map(|v| match serde_json::from_value(v) {
+                Ok(item) => Some(item),
+                Err(e) => {
+                    skipped += 1;
+                    eprintln!("unexpected item shape: {e}");
+                    None
+                }
+            })
+            .collect();
+        if skipped > 0 {
+            eprintln!("skipped {skipped} item(s) in a CurseForge response");
+        }
+        Ok(Paged { data, pagination: raw.pagination })
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Category {
     pub id: u32,
+    #[serde(deserialize_with = "nn")]
     pub name: String,
+    #[serde(deserialize_with = "nn")]
     pub slug: String,
     pub icon_url: Option<String>,
     pub class_id: Option<u32>,
@@ -71,14 +116,17 @@ pub struct Asset {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Author {
+    #[serde(deserialize_with = "nn")]
     pub name: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct FileIndex {
+    #[serde(deserialize_with = "nn")]
     pub game_version: String,
     pub file_id: u32,
+    #[serde(deserialize_with = "nn")]
     pub filename: String,
     pub release_type: u8,
     pub game_version_type_id: Option<u32>,
@@ -88,15 +136,23 @@ pub struct FileIndex {
 #[serde(rename_all = "camelCase", default)]
 pub struct Mod {
     pub id: u32,
+    #[serde(deserialize_with = "nn")]
     pub name: String,
+    #[serde(deserialize_with = "nn")]
     pub slug: String,
+    #[serde(deserialize_with = "nn")]
     pub summary: String,
     pub download_count: f64,
+    #[serde(deserialize_with = "nn")]
     pub links: Links,
     pub logo: Option<Asset>,
+    #[serde(deserialize_with = "nn")]
     pub screenshots: Vec<Asset>,
+    #[serde(deserialize_with = "nn")]
     pub authors: Vec<Author>,
+    #[serde(deserialize_with = "nn")]
     pub categories: Vec<Category>,
+    #[serde(deserialize_with = "nn")]
     pub latest_files_indexes: Vec<FileIndex>,
     pub date_modified: Option<String>,
     pub allow_mod_distribution: Option<bool>,
@@ -120,23 +176,59 @@ pub struct Dependency {
 pub struct File {
     pub id: u32,
     pub mod_id: u32,
+    #[serde(deserialize_with = "nn")]
     pub display_name: String,
+    #[serde(deserialize_with = "nn")]
     pub file_name: String,
     pub release_type: u8,
+    #[serde(deserialize_with = "nn")]
     pub file_date: String,
     pub file_length: u64,
     pub download_url: Option<String>,
+    #[serde(deserialize_with = "nn")]
     pub game_versions: Vec<String>,
+    #[serde(deserialize_with = "nn")]
     pub sortable_game_versions: Vec<SortableGameVersion>,
+    #[serde(deserialize_with = "nn")]
     pub dependencies: Vec<Dependency>,
     pub is_available: Option<bool>,
+    /// The addon folders in this file and their fingerprints (WoW only).
+    #[serde(deserialize_with = "nn")]
+    pub modules: Vec<FileModule>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FileModule {
+    #[serde(deserialize_with = "nn")]
+    pub name: String,
+    pub fingerprint: u64,
+}
+
+/// A file CurseForge matched from folder fingerprints, and the mod it belongs to.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FingerprintMatch {
+    pub id: u32,
+    pub file: File,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FingerprintMatches {
+    #[serde(deserialize_with = "nn")]
+    pub exact_matches: Vec<FingerprintMatch>,
+    #[serde(deserialize_with = "nn")]
+    pub partial_matches: Vec<FingerprintMatch>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct GameVersionType {
     pub id: u32,
+    #[serde(deserialize_with = "nn")]
     pub name: String,
+    #[serde(deserialize_with = "nn")]
     pub slug: String,
 }
 
@@ -210,6 +302,8 @@ pub struct AddonSummary {
     pub latest_file_id: Option<u32>,
     pub game_version: Option<String>,
     pub date_modified: Option<String>,
+    /// False when the author only allows downloads from the CurseForge website.
+    pub allow_distribution: bool,
 }
 
 impl AddonSummary {
@@ -230,6 +324,7 @@ impl AddonSummary {
             latest_file_id: latest.map(|i| i.file_id),
             game_version: latest.map(|i| i.game_version.clone()).filter(|v| !v.is_empty()),
             date_modified: m.date_modified.clone(),
+            allow_distribution: m.allow_mod_distribution != Some(false),
         }
     }
 }
@@ -482,7 +577,14 @@ impl CurseForge {
             .send()
             .await?;
         let resp = Self::ensure_ok(resp, path).await?;
-        Ok(resp.json::<T>().await?)
+        Self::parse(resp, path).await
+    }
+
+    /// Reads a JSON body, reporting exactly what didn't match if parsing fails.
+    async fn parse<T: DeserializeOwned>(resp: reqwest::Response, path: &str) -> AppResult<T> {
+        let text = resp.text().await?;
+        serde_json::from_str(&text)
+            .map_err(|e| AppError::Api(format!("unexpected data from {path}: {e}")))
     }
 
     async fn probe(&self, path: &str, query: &[(&str, &str)]) -> Probe {
@@ -589,7 +691,24 @@ impl CurseForge {
             .send()
             .await?;
         let resp = Self::ensure_ok(resp, "/v1/mods").await?;
-        let e: Envelope<Vec<Mod>> = resp.json().await?;
+        // Parsed like a page so one malformed addon is skipped, not fatal.
+        let page: Paged<Mod> = Self::parse(resp, "/v1/mods").await?;
+        Ok(page.data)
+    }
+
+    /// Looks up addon folders by fingerprint (POST /v1/fingerprints/{gameId}).
+    pub async fn fingerprint_matches(&self, fingerprints: &[u32]) -> AppResult<FingerprintMatches> {
+        let path = format!("/v1/fingerprints/{WOW_GAME_ID}");
+        let resp = self
+            .http
+            .post(format!("{}{path}", self.base))
+            .header("x-api-key", &self.key)
+            .header("Accept", "application/json")
+            .json(&serde_json::json!({ "fingerprints": fingerprints }))
+            .send()
+            .await?;
+        let resp = Self::ensure_ok(resp, &path).await?;
+        let e: Envelope<FingerprintMatches> = Self::parse(resp, &path).await?;
         Ok(e.data)
     }
 
@@ -627,7 +746,7 @@ impl CurseForge {
             return Ok(None);
         }
         let resp = Self::ensure_ok(resp, &path).await?;
-        let e: Envelope<Option<String>> = resp.json().await?;
+        let e: Envelope<Option<String>> = Self::parse(resp, &path).await?;
         Ok(e.data.filter(|s| !s.is_empty()))
     }
 
@@ -833,5 +952,27 @@ mod tests {
         assert_eq!(latest_index_for_type(&m, 88568, 1).unwrap().file_id, 10);
         assert_eq!(latest_index_for_type(&m, 88568, 2).unwrap().file_id, 12);
         assert!(latest_index_for_type(&m, 1, 3).is_none());
+    }
+}
+
+#[cfg(test)]
+mod live_fixtures {
+    use super::*;
+
+    /// Parses saved real search responses with the app's types:
+    /// `EZADDON_FIXTURES=/path/to/dir cargo test parses_saved -- --ignored`
+    #[test]
+    #[ignore]
+    fn parses_saved_search_responses() {
+        let dir = std::env::var("EZADDON_FIXTURES").expect("set EZADDON_FIXTURES");
+        let mut failures = 0;
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let text = std::fs::read_to_string(e.path()).unwrap();
+            if let Err(err) = serde_json::from_str::<Paged<Mod>>(&text) {
+                failures += 1;
+                println!("{}: {err}", e.file_name().to_string_lossy());
+            }
+        }
+        assert_eq!(failures, 0);
     }
 }

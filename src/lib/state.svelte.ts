@@ -1,5 +1,15 @@
 // App-wide reactive state, shared by every component.
-import { api, toAppError, type AppError, type InstalledAddon, type Progress, type SettingsView } from "./api";
+import {
+  api,
+  toAppError,
+  type AppError,
+  type AppUpdateEvent,
+  type InstalledAddon,
+  type Progress,
+  type ScanReport,
+  type SettingsView,
+  type UpdateInfo,
+} from "./api";
 
 export interface Toast {
   id: number;
@@ -15,6 +25,12 @@ export const app = $state({
   installedById: {} as Record<number, InstalledAddon>,
   /** modId → latest file id, for addons that have an update. */
   updates: {} as Record<number, number>,
+  /** modIds whose update must be downloaded from the CurseForge website. */
+  updateBlocked: {} as Record<number, true>,
+  /** EzAddon's own update, when one is available or installing. */
+  appUpdate: null as null | { state: "available" | "installing" | "error"; version?: string; message?: string; progress?: number },
+  /** Result of the last addon scan, shown in My Addons. */
+  lastScan: null as ScanReport | null,
   /** modId → live install progress. */
   busy: {} as Record<number, Progress>,
   toasts: [] as Toast[],
@@ -59,10 +75,46 @@ export async function refreshInstalled() {
 export async function checkUpdates(silent = false) {
   try {
     const list = await api.checkUpdates();
-    app.updates = Object.fromEntries(list.map((u) => [u.modId, u.latestFileId]));
+    setUpdates(list);
     if (!silent) toast("info", list.length ? `${list.length} update${list.length > 1 ? "s" : ""} available.` : "Everything is up to date.");
   } catch (e) {
     if (!silent) showError(e);
+  }
+}
+
+function setUpdates(list: UpdateInfo[]) {
+  app.updates = Object.fromEntries(list.map((u) => [u.modId, u.latestFileId]));
+  app.updateBlocked = Object.fromEntries(list.filter((u) => !u.canInstall).map((u) => [u.modId, true as const]));
+}
+
+/** Finds addons installed outside EzAddon, then checks them for updates. */
+export async function scanAddons(): Promise<ScanReport | null> {
+  try {
+    const report = await api.scanAddons();
+    app.lastScan = report;
+    await refreshInstalled();
+    const n = report.added.length;
+    toast(
+      n ? "success" : "info",
+      n
+        ? `Found ${n} addon${n > 1 ? "s" : ""} on CurseForge and added ${n > 1 ? "them" : "it"} to My Addons.`
+        : "No new addons found.",
+    );
+    if (n) await checkUpdates(true);
+    return report;
+  } catch (e) {
+    showError(e);
+    return null;
+  }
+}
+
+export async function installAppUpdate() {
+  app.appUpdate = { ...(app.appUpdate ?? {}), state: "installing", progress: 0 };
+  try {
+    const started = await api.installAppUpdate();
+    if (!started) app.appUpdate = null;
+  } catch (e) {
+    app.appUpdate = { state: "error", message: toAppError(e).message };
   }
 }
 
@@ -96,10 +148,15 @@ export async function uninstall(modId: number, name: string) {
 }
 
 export async function updateAll() {
-  const ids = Object.keys(app.updates).map(Number);
+  // Updates that must come from the CurseForge website can't be installed here.
+  const ids = Object.keys(app.updates).map(Number).filter((id) => !app.updateBlocked[id]);
   let ok = 0;
   for (const id of ids) {
     if (await install(id, app.installedById[id]?.name ?? `Addon #${id}`, true)) ok++;
+  }
+  if (!ids.length) {
+    toast("info", "The available updates have to be downloaded from the CurseForge website.");
+    return;
   }
   toast("success", `Updated ${ok} of ${ids.length} addon${ids.length > 1 ? "s" : ""}.`);
 }
@@ -112,8 +169,17 @@ export async function init() {
       if (app.busy[p.modId] && p.stage !== "done") app.busy[p.modId] = p;
     });
     await api.onUpdates((list) => {
-      app.updates = Object.fromEntries(list.map((u) => [u.modId, u.latestFileId]));
+      setUpdates(list);
     });
+    await api.onAppUpdate(
+      (e: AppUpdateEvent) => {
+        app.appUpdate =
+          e.state === "error" ? { state: "error", message: e.message } : { state: e.state, version: e.version, progress: app.appUpdate?.progress };
+      },
+      (received, total) => {
+        if (app.appUpdate) app.appUpdate.progress = total ? Math.round((received / total) * 100) : undefined;
+      },
+    );
   }
   app.settings = await api.getSettings();
   if (app.settings.addonsPathValid) await refreshInstalled();

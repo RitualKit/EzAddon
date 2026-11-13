@@ -20,6 +20,8 @@ pub struct Settings {
     pub close_to_tray: bool,
     /// Check for addon updates in the background and show a notification.
     pub notify_updates: bool,
+    /// Install new versions of EzAddon itself automatically at launch.
+    pub auto_update_app: bool,
     #[cfg(not(windows))]
     pub api_key: Option<String>,
 }
@@ -32,6 +34,7 @@ impl Default for Settings {
             version_type_override: None,
             close_to_tray: true,
             notify_updates: true,
+            auto_update_app: true,
             #[cfg(not(windows))]
             api_key: None,
         }

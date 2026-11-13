@@ -82,7 +82,14 @@
         <div class="cats">{#each a.categories as c}<span class="tag">{c}</span>{/each}</div>
       </div>
       <div class="cta">
-        <InstallButton modId={a.id} name={a.name} available={detail.latestFile !== null && detail.allowDistribution} large />
+        <InstallButton
+          modId={a.id}
+          name={a.name}
+          available={detail.latestFile !== null}
+          allowDistribution={detail.allowDistribution}
+          websiteUrl={a.websiteUrl}
+          large
+        />
         {#if a.websiteUrl}
           <button class="outline" onclick={() => a.websiteUrl && api.openUrl(a.websiteUrl)}>
             <Icon name="external" size={14} /> CurseForge page
@@ -103,7 +110,11 @@
     <div class="content scroll">
       <div class="inner">
         {#if !detail.allowDistribution}
-          <p class="warn">The author doesn't allow downloads from third-party apps. Use "CurseForge page" to download it.</p>
+          <p class="warn">
+            The author only allows downloads from the CurseForge website. Download it there and extract it into your
+            AddOns folder, then use <strong>Scan for addons</strong> in My Addons so EzAddon tracks it and tells you about
+            updates.
+          </p>
         {/if}
 
         {#if tab === "description"}

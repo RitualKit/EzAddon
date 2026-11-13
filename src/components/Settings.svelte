@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, toAppError, type KeyCheck, type Probe } from "../lib/api";
-  import { app, refreshInstalled, toast } from "../lib/state.svelte";
+  import { onMount } from "svelte";
+  import { app, installAppUpdate, refreshInstalled, toast } from "../lib/state.svelte";
 
   let { setup = false }: { setup?: boolean } = $props();
 
@@ -17,6 +18,29 @@
   let override = $state(app.settings?.versionTypeOverride?.toString() ?? "");
   let closeToTray = $state(app.settings?.closeToTray ?? true);
   let notifyUpdates = $state(app.settings?.notifyUpdates ?? true);
+  let autoUpdateApp = $state(app.settings?.autoUpdateApp ?? true);
+  let version = $state("");
+  let checkingApp = $state(false);
+  onMount(async () => {
+    try {
+      version = await api.appVersion();
+    } catch {
+      version = "";
+    }
+  });
+
+  async function checkApp() {
+    checkingApp = true;
+    try {
+      const u = await api.checkAppUpdate();
+      if (u) app.appUpdate = { state: "available", version: u.version };
+      else toast("info", "You have the latest version of EzAddon.");
+    } catch (e) {
+      toast("error", toAppError(e).message);
+    } finally {
+      checkingApp = false;
+    }
+  }
   let pathError = $state<string | null>(null);
 
   async function saveKey(force = false) {
@@ -90,6 +114,7 @@
         ov !== null && Number.isFinite(ov) ? ov : null,
         closeToTray,
         notifyUpdates,
+        autoUpdateApp,
       );
       path = app.settings.addonsPath ?? "";
       if (path && !app.settings.addonsPathValid) {
@@ -225,6 +250,26 @@
             <span class="muted small">Checks every 6 hours in the background and shows a Windows notification.</span>
           </span>
         </label>
+      </section>
+
+      <section>
+        <h2>EzAddon updates</h2>
+        <p class="muted">You're running EzAddon {version || "(unknown version)"}.</p>
+        <label class="toggle">
+          <input type="checkbox" bind:checked={autoUpdateApp} onchange={() => save()} />
+          <span>
+            <strong>Update EzAddon automatically</strong>
+            <span class="muted small">New versions are installed when EzAddon starts. Otherwise you're asked first.</span>
+          </span>
+        </label>
+        <div class="row">
+          <button class="outline" onclick={checkApp} disabled={checkingApp}>
+            {#if checkingApp}<span class="spinner"></span>{/if} Check for EzAddon updates
+          </button>
+          {#if app.appUpdate?.state === "available"}
+            <button class="primary" onclick={installAppUpdate}>Install {app.appUpdate.version}</button>
+          {/if}
+        </div>
       </section>
 
       <section>

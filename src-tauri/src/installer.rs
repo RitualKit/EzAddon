@@ -43,7 +43,7 @@ pub async fn plan_install<S: FileSource>(
 ) -> AppResult<Plan> {
     enum Frame {
         Enter(u32),
-        Exit(u32, File),
+        Exit(u32, Box<File>),
     }
     let mut plan = Plan::default();
     let mut seen = HashSet::new();
@@ -64,14 +64,14 @@ pub async fn plan_install<S: FileSource>(
                             .filter(|d| d.relation_type == RELATION_REQUIRED && d.mod_id != 0)
                             .map(|d| d.mod_id)
                             .collect();
-                        stack.push(Frame::Exit(id, file));
+                        stack.push(Frame::Exit(id, Box::new(file)));
                         for d in deps.into_iter().rev() {
                             stack.push(Frame::Enter(d));
                         }
                     }
                 }
             }
-            Frame::Exit(id, file) => plan.steps.push(Step { mod_id: id, file }),
+            Frame::Exit(id, file) => plan.steps.push(Step { mod_id: id, file: *file }),
         }
     }
     Ok(plan)
@@ -430,5 +430,43 @@ mod tests {
         remove_folders(&addons, &["X".into(), "../Keep".into()]).unwrap();
         assert!(!addons.join("X").exists());
         assert!(d.path().join("Keep").exists());
+    }
+}
+
+/// Live install against the real API and CDN, run by hand:
+/// `cargo test live_install -- --ignored --nocapture`
+#[cfg(test)]
+mod live {
+    use super::*;
+    use crate::curseforge::{pick_best_file, CurseForge};
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_install() {
+        let cf = CurseForge::new(CurseForge::http_client(), "proxy-injected".into());
+        // Simulationcraft allows third-party downloads; Bagnon doesn't.
+        let files = cf.files(82745, 88568).await.unwrap();
+        let file = pick_best_file(&files, 88568, 1).expect("a Forever file").clone();
+        let url = match file.download_url.clone() {
+            Some(u) => u,
+            None => cf.download_url(82745, file.id).await.unwrap().expect("downloadable"),
+        };
+        assert_eq!(cf.download_url(1592, 9546609).await.unwrap(), None, "Bagnon should be website-only");
+
+        let dir = tempfile::tempdir().unwrap();
+        let addons = dir.path().join("_forever_/Interface/AddOns");
+        let zip = dir.path().join("dl.zip");
+        let mut last = (0, None);
+        download(cf.http(), &url, &zip, |r, t| last = (r, t)).await.unwrap();
+        println!("downloaded {} of {:?} bytes from {url}", last.0, last.1);
+        let staging = addons.join(".ezaddon-staging-82745");
+        let folders = extract_zip(&zip, &staging, "Simulationcraft").unwrap();
+        swap_in(&addons, &staging, &folders).unwrap();
+        let _ = std::fs::remove_dir_all(&staging);
+        println!("installed folders {folders:?}");
+        assert!(addons.join("Simulationcraft").join("Simulationcraft.toc").is_file());
+        // The installed folder fingerprints to what CurseForge lists for the file.
+        let fp = crate::scanner::folder_fingerprint(&addons.join("Simulationcraft")).unwrap();
+        assert!(file.modules.iter().any(|m| m.fingerprint == u64::from(fp)), "fingerprint {fp} not in {:?}", file.modules);
     }
 }

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { api } from "./lib/api";
-  import { app, checkUpdates, dismissToast, init, showError } from "./lib/state.svelte";
+  import { app, checkUpdates, dismissToast, init, installAppUpdate, showError } from "./lib/state.svelte";
   import Browse from "./components/Browse.svelte";
   import Installed from "./components/Installed.svelte";
   import Settings from "./components/Settings.svelte";
@@ -51,6 +51,22 @@
   </nav>
 
   <div class="main">
+    {#if app.appUpdate}
+      {@const u = app.appUpdate}
+      <div class="app-update" class:err={u.state === "error"}>
+        {#if u.state === "available"}
+          <span class="grow">A new version of EzAddon ({u.version}) is available.</span>
+          <button class="primary" onclick={installAppUpdate}>Restart and update</button>
+          <button class="icon" title="Later" onclick={() => (app.appUpdate = null)}><Icon name="close" size={14} /></button>
+        {:else if u.state === "installing"}
+          <span class="spinner"></span>
+          <span class="grow">Updating EzAddon{u.version ? ` to ${u.version}` : ""}…{u.progress != null ? ` ${u.progress}%` : ""} It restarts by itself when done.</span>
+        {:else}
+          <span class="grow">EzAddon couldn't update itself: {u.message}</span>
+          <button class="icon" title="Dismiss" onclick={() => (app.appUpdate = null)}><Icon name="close" size={14} /></button>
+        {/if}
+      </div>
+    {/if}
     {#if !ready}
       <div class="center muted"><span class="spinner"></span></div>
     {:else if needsSetup}
@@ -131,6 +147,12 @@
   }
 
   .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .app-update {
+    display: flex; align-items: center; gap: 10px; padding: 8px 16px;
+    background: #2a1a12; border-bottom: 1px solid #5a3220; color: var(--text);
+  }
+  .app-update.err { background: #2a1416; border-bottom-color: #5a2a2a; }
+  .app-update button.primary { padding: 5px 12px; }
   .center { height: 100%; display: grid; place-items: center; }
 
   .game-head {

@@ -33,6 +33,8 @@ const addons: AddonSummary[] = Array.from({ length: 75 }, (_, i) => ({
   websiteUrl: "https://www.curseforge.com/wow/addons/example",
   latestFileId: 5000 + i,
   gameVersion: "1.60.1",
+  // Every third addon is website-only, like ~30% of real WoW Forever addons.
+  allowDistribution: i % 3 !== 2,
   dateModified: new Date(Date.now() - i * 86400000).toISOString(),
 }));
 
@@ -66,6 +68,7 @@ let settings: SettingsView = {
   hasApiKey: true,
   closeToTray: true,
   notifyUpdates: true,
+  autoUpdateApp: true,
 };
 let installed: InstalledAddon[] = [
   {
@@ -100,6 +103,7 @@ const handlers: Record<string, (a: any) => unknown> = {
       addonsPathValid: !!a.addonsPath,
       closeToTray: a.closeToTray ?? settings.closeToTray,
       notifyUpdates: a.notifyUpdates ?? settings.notifyUpdates,
+      autoUpdateApp: a.autoUpdateApp ?? settings.autoUpdateApp,
     }),
   // Paste "bad" to see the failed-check UI in dev.
   set_api_key: (a) => {
@@ -141,7 +145,20 @@ const handlers: Record<string, (a: any) => unknown> = {
   },
   uninstall_addon: (a) => (installed = installed.filter((x) => x.modId !== a.modId)),
   list_installed: () => installed,
-  check_updates: () => installed.filter((x) => x.modId === 1001).map((x) => ({ modId: x.modId, latestFileId: 5001, latestFileName: "Details-1.60.2.zip" })),
+  check_updates: () =>
+    installed
+      .filter((x) => x.modId === 1001 || x.fileId === 0)
+      .map((x) => ({ modId: x.modId, latestFileId: 5001, latestFileName: "update.zip", canInstall: x.modId !== 1002 })),
+  scan_addons: () => {
+    const found: InstalledAddon[] = [
+      { modId: 1002, name: "Bagnon", fileId: 7002, fileName: "Bagnon-12.1.9.zip", displayName: "Bagnon 12.1.9", folders: ["Bagnon", "Bagnon_Config"], installedAt: Date.now() / 1000, thumbnail: pic(2), websiteUrl: "https://www.curseforge.com/wow/addons/bagnon", isDependency: false },
+      { modId: 1006, name: "Leatrix Plus", fileId: 0, fileName: "", displayName: "Unknown version", folders: ["Leatrix_Plus"], installedAt: Date.now() / 1000, thumbnail: pic(6), websiteUrl: null, isDependency: false },
+    ].filter((f) => !installed.some((x) => x.modId === f.modId));
+    installed = [...installed, ...found];
+    return { added: found, unmatched: found.length ? ["MyOwnTweaks", "!BugGrabber_Old"] : [], alreadyManaged: 1, scanned: 5 };
+  },
+  check_app_update: () => null,
+  install_app_update: () => false,
 };
 
 export const mockBackend = {
@@ -159,6 +176,8 @@ export const mockBackend = {
     };
   },
   listenUpdates: async () => () => {},
+  listenAppUpdate: async () => () => {},
+  appVersion: async () => "0.1.0-dev",
   openUrl: async (u: string) => {
     window.open(u, "_blank");
   },
