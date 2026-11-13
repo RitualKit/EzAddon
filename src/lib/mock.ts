@@ -1,5 +1,5 @@
 // Fake backend for `npm run dev` in a plain browser. Never part of a release build.
-import type { AddonDetail, AddonSummary, CategoryNode, InstalledAddon, Progress, SettingsView } from "./api";
+import type { AddonDetail, AddonSummary, CategoryNode, InstalledAddon, KeyCheck, Progress, SettingsView } from "./api";
 
 const names = [
   ["Questie", "The ultimate questing helper: quests on your map and minimap."],
@@ -75,6 +75,18 @@ let installed: InstalledAddon[] = [
   },
 ];
 const listeners: ((p: Progress) => void)[] = [];
+
+function mockCheck(ok: boolean): KeyCheck {
+  return {
+    general: { ok: true, status: 200, endpoint: "/v1/games?pageSize=1", detail: "" },
+    wow: ok
+      ? { ok: true, status: 200, endpoint: "/v1/mods/search?gameId=1&pageSize=1", detail: "" }
+      : { ok: false, status: 403, endpoint: "/v1/mods/search?gameId=1&pageSize=1", detail: 'response: {"message":"Forbidden"}; x-cache: Error from cloudfront' },
+    hint: ok
+      ? "The key works."
+      : "The key works, but CurseForge refuses World of Warcraft requests for it (HTTP 403). Check your project in console.curseforge.com, or generate a new key.",
+  };
+}
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const handlers: Record<string, (a: any) => unknown> = {
@@ -89,7 +101,13 @@ const handlers: Record<string, (a: any) => unknown> = {
       closeToTray: a.closeToTray ?? settings.closeToTray,
       notifyUpdates: a.notifyUpdates ?? settings.notifyUpdates,
     }),
-  set_api_key: (a) => (settings = { ...settings, hasApiKey: !!a.key }),
+  // Paste "bad" to see the failed-check UI in dev.
+  set_api_key: (a) => {
+    if (a.key === "bad" && !a.force) throw { kind: "keyCheckFailed", message: mockCheck(false).hint, url: null, check: mockCheck(false) };
+    settings = { ...settings, hasApiKey: !!a.key };
+    return { settings, check: a.key ? mockCheck(a.key !== "bad") : null };
+  },
+  test_api_key: () => mockCheck(true),
   detect_wow_path: () => "C:\\Program Files (x86)\\World of Warcraft\\_forever_\\Interface\\AddOns",
   open_addons_folder: () => null,
   get_categories: () => categories,

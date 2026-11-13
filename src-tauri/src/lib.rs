@@ -8,7 +8,7 @@ mod tray;
 mod wow;
 
 use curseforge::{
-    pick_best_file, AddonSummary, Asset, CategoryNode, CurseForge, SearchPage,
+    pick_best_file, KeyCheck, AddonSummary, Asset, CategoryNode, CurseForge, SearchPage,
     FALLBACK_FOREVER_TYPE_ID, MAX_SEARCH_WINDOW, PAGE_SIZE, RELATION_REQUIRED,
 };
 use error::{AppError, AppResult};
@@ -126,8 +126,13 @@ impl AppState {
                 *self.forever_type.lock().unwrap() = Some(id);
                 Ok(id)
             }
-            Err(AppError::InvalidApiKey) => Err(AppError::InvalidApiKey),
-            Err(_) => Ok(FALLBACK_FOREVER_TYPE_ID),
+            // Don't let a refused or failed lookup block searching: use the
+            // known id (uncached, so it's retried later). If the key really is
+            // refused, the search itself reports CurseForge's exact answer.
+            Err(e) => {
+                eprintln!("version-type lookup failed, using fallback: {e}");
+                Ok(FALLBACK_FOREVER_TYPE_ID)
+            }
         }
     }
 
@@ -270,18 +275,41 @@ fn save_settings(
     Ok(settings_view(&s))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KeySaveResult {
+    settings: SettingsView,
+    /// The key check, when one ran. It may contain failures if the key was
+    /// saved anyway (`force`) or CurseForge couldn't be reached.
+    check: Option<KeyCheck>,
+}
+
+/// Saves (or, when empty, removes) the API key. The key is tested first; if
+/// CurseForge refuses it, nothing is saved unless `force` is set.
 #[tauri::command]
-async fn set_api_key(state: State<'_, AppState>, key: String) -> AppResult<SettingsView> {
-    let key = key.trim().to_string();
+async fn set_api_key(state: State<'_, AppState>, key: String, force: Option<bool>) -> AppResult<KeySaveResult> {
+    let key = curseforge::sanitize_key(&key).map_err(AppError::Other)?;
+    let mut check = None;
     if !key.is_empty() {
-        CurseForge::new(state.http.clone(), key.clone()).validate_key().await?;
+        let c = CurseForge::new(state.http.clone(), key.clone()).diagnose_key().await;
+        // A network failure isn't the key's fault, so it doesn't block saving.
+        if c.has_http_failure() && !force.unwrap_or(false) {
+            return Err(AppError::KeyCheckFailed(Box::new(c)));
+        }
+        check = Some(c);
     }
     let mut s = state.settings.lock().unwrap();
     settings::set_api_key(&mut s, (!key.is_empty()).then_some(key.as_str()))?;
     s.save(&state.settings_path)?;
     *state.forever_type.lock().unwrap() = None;
     state.details.lock().unwrap().clear();
-    Ok(settings_view(&s))
+    Ok(KeySaveResult { settings: settings_view(&s), check })
+}
+
+/// Tests the saved key and reports what CurseForge answers.
+#[tauri::command]
+async fn test_api_key(state: State<'_, AppState>) -> AppResult<KeyCheck> {
+    Ok(state.client()?.diagnose_key().await)
 }
 
 #[tauri::command]
@@ -755,6 +783,7 @@ pub fn run() {
             get_settings,
             save_settings,
             set_api_key,
+            test_api_key,
             detect_wow_path,
             open_addons_folder,
             get_categories,

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, toAppError } from "../lib/api";
+  import { api, toAppError, type KeyCheck, type Probe } from "../lib/api";
   import { app, refreshInstalled, toast } from "../lib/state.svelte";
 
   let { setup = false }: { setup?: boolean } = $props();
@@ -8,6 +8,10 @@
   let key = $state("");
   let keyBusy = $state(false);
   let keyError = $state<string | null>(null);
+  /** Result of the last key test, shown in a box below the field. */
+  let check = $state.raw<KeyCheck | null>(null);
+  /** True when the check failed and the key was not saved (offer "Save anyway"). */
+  let unsaved = $state(false);
   let path = $state(app.settings?.addonsPath ?? "");
   let channel = $state(app.settings?.releaseChannel ?? 1);
   let override = $state(app.settings?.versionTypeOverride?.toString() ?? "");
@@ -15,17 +19,64 @@
   let notifyUpdates = $state(app.settings?.notifyUpdates ?? true);
   let pathError = $state<string | null>(null);
 
-  async function saveKey() {
+  async function saveKey(force = false) {
     keyBusy = true;
     keyError = null;
+    check = null;
+    unsaved = false;
     try {
-      app.settings = await api.setApiKey(key);
+      const res = await api.setApiKey(key, force);
+      app.settings = res.settings;
       key = "";
-      toast("success", app.settings.hasApiKey ? "API key saved." : "API key removed.");
+      const ok = !res.check || (res.check.general.ok && res.check.wow.ok);
+      if (!ok) check = res.check;
+      toast(ok ? "success" : "info", !app.settings.hasApiKey ? "API key removed." : ok ? "API key saved." : "API key saved, but CurseForge reported a problem.");
+    } catch (e) {
+      const err = toAppError(e);
+      if (err.kind === "keyCheckFailed" && err.check) {
+        check = err.check;
+        unsaved = true;
+      } else {
+        keyError = err.message;
+      }
+    } finally {
+      keyBusy = false;
+    }
+  }
+
+  let testing = $state(false);
+  async function testKey() {
+    keyBusy = testing = true;
+    keyError = null;
+    check = null;
+    unsaved = false;
+    try {
+      check = await api.testApiKey();
     } catch (e) {
       keyError = toAppError(e).message;
     } finally {
-      keyBusy = false;
+      keyBusy = testing = false;
+    }
+  }
+
+  function probeLine(label: string, p: Probe): string {
+    const result = p.ok ? `OK (HTTP ${p.status})` : p.status ? `failed, HTTP ${p.status}` : "failed, no response";
+    return `${label} [GET ${p.endpoint}]: ${result}${p.detail ? `, ${p.detail}` : ""}`;
+  }
+
+  async function copyCheck() {
+    if (!check) return;
+    const text = [
+      "EzAddon API key check",
+      probeLine("General API access", check.general),
+      probeLine("World of Warcraft addons", check.wow),
+      `Hint: ${check.hint}`,
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("success", "Details copied.");
+    } catch {
+      toast("error", "Couldn't copy to the clipboard.");
     }
   }
 
@@ -91,15 +142,46 @@
           bind:value={key}
           onkeydown={(e) => e.key === "Enter" && key.trim() && saveKey()}
         />
-        <button class="primary" disabled={keyBusy || !key.trim()} onclick={saveKey}>
-          {#if keyBusy}<span class="spinner"></span>{/if} Save key
+        <button class="primary" disabled={keyBusy || !key.trim()} onclick={() => saveKey()}>
+          {#if keyBusy && !testing}<span class="spinner"></span>{/if} Save key
         </button>
+        {#if app.settings?.hasApiKey}
+          <button class="outline" disabled={keyBusy} onclick={testKey}>
+            {#if testing}<span class="spinner"></span>{/if} Test key
+          </button>
+        {/if}
         {#if app.settings?.hasApiKey && !setup}
           <button class="outline danger" disabled={keyBusy} onclick={() => { key = ""; saveKey(); }}>Remove</button>
         {/if}
       </div>
       {#if keyError}<p class="err">{keyError}</p>{/if}
-      {#if app.settings?.hasApiKey}<p class="ok small">✓ API key is set</p>{/if}
+      {#if check}
+        {@const ok = check.general.ok && check.wow.ok}
+        <div class="check" class:bad={!ok}>
+          {#each [["General API access", check.general], ["World of Warcraft addons", check.wow]] as [label, p]}
+            {@const pr = p as Probe}
+            <div class="probe">
+              <span class={pr.ok ? "pass" : "fail"}>{pr.ok ? "✓" : "✗"}</span>
+              <div class="grow">
+                <div>
+                  <strong>{label}</strong>
+                  <span class="muted small">{pr.ok ? `HTTP ${pr.status}` : pr.status ? `HTTP ${pr.status}` : "no response"}</span>
+                </div>
+                {#if pr.detail}<div class="dim small detail">{pr.detail}</div>{/if}
+              </div>
+            </div>
+          {/each}
+          <p class="hint">{check.hint}</p>
+          <div class="row">
+            {#if unsaved}
+              <button class="outline" disabled={keyBusy} onclick={() => saveKey(true)}>Save anyway</button>
+            {/if}
+            {#if !ok}<button class="outline" onclick={copyCheck}>Copy details</button>{/if}
+            <button class="ghost" onclick={() => (check = null)}>Dismiss</button>
+          </div>
+        </div>
+      {/if}
+      {#if app.settings?.hasApiKey && !check}<p class="ok small">✓ API key is set</p>{/if}
     </section>
 
     <section>
@@ -168,6 +250,14 @@
   section { padding: 18px 20px; background: var(--panel); border-radius: var(--radius); }
   h2 { font-size: 15px; margin-bottom: 4px; }
   p { margin: 4px 0 10px; }
+  .check { margin-top: 12px; padding: 12px 14px; border-radius: var(--radius); background: var(--bg-2); border: 1px solid var(--line); user-select: text; }
+  .check.bad { border-color: #5a2a2a; }
+  .probe { display: flex; gap: 10px; align-items: flex-start; padding: 4px 0; }
+  .pass, .fail { font-weight: 800; width: 16px; flex: none; }
+  .pass { color: var(--good); }
+  .fail { color: var(--bad); }
+  .detail { overflow-wrap: anywhere; margin-top: 2px; }
+  .hint { margin: 8px 0 10px; }
   .err { color: var(--bad); margin: 8px 0 0; user-select: text; }
   .ok { color: var(--good); margin: 8px 0 0; overflow-wrap: anywhere; }
   .toggle { display: flex; gap: 12px; align-items: flex-start; padding: 8px 0; cursor: pointer; }

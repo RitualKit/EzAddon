@@ -106,10 +106,32 @@ export interface Progress {
   total: number | null;
 }
 
+/** One test request made with the API key. */
+export interface Probe {
+  ok: boolean;
+  /** HTTP status, or null when CurseForge couldn't be reached. */
+  status: number | null;
+  endpoint: string;
+  detail: string;
+}
+
+export interface KeyCheck {
+  general: Probe;
+  wow: Probe;
+  hint: string;
+}
+
+export interface KeySaveResult {
+  settings: SettingsView;
+  check: KeyCheck | null;
+}
+
 export interface AppError {
   kind: string;
   message: string;
   url: string | null;
+  /** Present when kind is "keyCheckFailed". */
+  check?: KeyCheck | null;
 }
 
 /** Sort options match CurseForge's ModsSearchSortField values. */
@@ -184,7 +206,9 @@ export const api = {
     notifyUpdates?: boolean,
   ) =>
     call<SettingsView>("save_settings", { addonsPath, releaseChannel, versionTypeOverride, closeToTray, notifyUpdates }),
-  setApiKey: (key: string) => call<SettingsView>("set_api_key", { key }),
+  /** Tests and saves the key. With force, saves even if CurseForge refuses it. */
+  setApiKey: (key: string, force = false) => call<KeySaveResult>("set_api_key", { key, force }),
+  testApiKey: () => call<KeyCheck>("test_api_key"),
   detectWowPath: () => call<string | null>("detect_wow_path"),
   openAddonsFolder: () => call<void>("open_addons_folder"),
   getCategories: (refresh = false) => call<CategoryNode[]>("get_categories", { refresh }),

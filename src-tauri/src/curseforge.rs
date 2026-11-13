@@ -312,15 +312,130 @@ pub fn build_category_tree(cats: &[Category]) -> (Option<u32>, Vec<CategoryNode>
 
 // ---------- HTTP client ----------
 
+// ---------- API key checks ----------
+
+/// Cleans up a pasted key: removes whitespace (including inside the key),
+/// zero-width characters, surrounding quotes and an accidental `x-api-key:`
+/// prefix. Returns an empty string for an empty paste (meaning "remove").
+pub fn sanitize_key(raw: &str) -> Result<String, String> {
+    let compact: String = raw
+        .chars()
+        .filter(|c| !c.is_whitespace() && !matches!(c, '\u{200B}'..='\u{200D}' | '\u{2060}' | '\u{FEFF}'))
+        .collect();
+    let mut key = compact.as_str();
+    if key.len() >= 10 && key[..10].eq_ignore_ascii_case("x-api-key:") {
+        key = &key[10..];
+    }
+    let key = key.trim_matches(|c| matches!(c, '"' | '\'' | '`'));
+    if let Some(bad) = key.chars().find(|c| !c.is_ascii_graphic()) {
+        return Err(format!(
+            "The key contains an unexpected character ({bad:?}). Copy it again from console.curseforge.com."
+        ));
+    }
+    Ok(key.to_string())
+}
+
+/// The result of one test request made with a key.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Probe {
+    pub ok: bool,
+    /// HTTP status, or `None` when CurseForge couldn't be reached at all.
+    pub status: Option<u16>,
+    pub endpoint: String,
+    pub detail: String,
+}
+
+/// Two test requests: one any valid key may make, and the World of Warcraft
+/// search the app actually needs. Together they tell a bad key apart from a
+/// key that works but is refused for WoW, or a network problem.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyCheck {
+    pub general: Probe,
+    pub wow: Probe,
+    pub hint: String,
+}
+
+impl KeyCheck {
+    pub fn new(general: Probe, wow: Probe) -> Self {
+        let hint = key_hint(&general, &wow);
+        KeyCheck { general, wow, hint }
+    }
+
+    /// True if CurseForge itself answered with an error (not just unreachable).
+    pub fn has_http_failure(&self) -> bool {
+        [&self.general, &self.wow].iter().any(|p| !p.ok && p.status.is_some())
+    }
+}
+
+fn key_hint(general: &Probe, wow: &Probe) -> String {
+    let st = |p: &Probe| p.status.unwrap_or(0);
+    let cdn = [general, wow]
+        .iter()
+        .any(|p| p.detail.to_ascii_lowercase().contains("cloudfront") || p.detail.to_ascii_lowercase().contains("cloudflare"));
+    if general.ok && wow.ok {
+        "The key works.".into()
+    } else if st(general) == 429 || st(wow) == 429 {
+        "CurseForge is rate-limiting requests. Wait a minute and test again.".into()
+    } else if general.status.is_none() && wow.status.is_none() {
+        "Couldn't reach CurseForge. Check your internet connection, firewall, antivirus or proxy.".into()
+    } else if st(general) == 401 || st(wow) == 401 {
+        "CurseForge doesn't recognize this key. Copy it again from console.curseforge.com, or generate a new one.".into()
+    } else if general.ok {
+        format!(
+            "The key works, but CurseForge refuses World of Warcraft requests for it (HTTP {}). \
+             Check your project in console.curseforge.com, or generate a new key.",
+            st(wow)
+        )
+    } else if st(general) == 403 {
+        let mut h = "CurseForge refused this key (HTTP 403). It may be revoked or not active yet: \
+                     generate a new key in console.curseforge.com (some people also had to rename \
+                     their console organization first)."
+            .to_string();
+        if cdn {
+            h.push_str(" The refusal came from CurseForge's CDN, which can also mean your network or IP is being blocked or rate-limited; try again later or on another network.");
+        }
+        h
+    } else {
+        format!("CurseForge returned an error (HTTP {}). It may be having problems; try again later.", st(general).max(st(wow)))
+    }
+}
+
+/// Short, single-line description of a failed response for error messages:
+/// the start of the body plus headers that show who refused the request.
+async fn describe_failure(resp: reqwest::Response) -> String {
+    let mut parts = Vec::new();
+    for h in ["server", "x-cache", "x-amzn-errortype", "cf-ray"] {
+        if let Some(v) = resp.headers().get(h).and_then(|v| v.to_str().ok()) {
+            parts.push(format!("{h}: {v}"));
+        }
+    }
+    let body = resp.text().await.unwrap_or_default();
+    let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !body.is_empty() {
+        let short: String = body.chars().take(200).collect();
+        let ell = if body.chars().count() > 200 { "…" } else { "" };
+        parts.insert(0, format!("response: {short}{ell}"));
+    }
+    parts.join("; ")
+}
+
 #[derive(Clone)]
 pub struct CurseForge {
     http: reqwest::Client,
     key: String,
+    base: String,
 }
 
 impl CurseForge {
     pub fn new(http: reqwest::Client, key: String) -> Self {
-        CurseForge { http, key }
+        CurseForge { http, key, base: API_BASE.to_string() }
+    }
+
+    #[cfg(test)]
+    pub fn with_base(http: reqwest::Client, key: String, base: String) -> Self {
+        CurseForge { http, key, base }
     }
 
     pub fn http_client() -> reqwest::Client {
@@ -337,31 +452,76 @@ impl CurseForge {
             .expect("HTTP client")
     }
 
-    fn check_status(status: reqwest::StatusCode, path: &str) -> AppResult<()> {
-        match status.as_u16() {
-            200..=299 => Ok(()),
-            401 | 403 => Err(AppError::InvalidApiKey),
-            code => Err(AppError::Api(format!("{path} returned HTTP {code}"))),
+    /// Passes a successful response through; turns a failed one into an
+    /// error that keeps the status and what CurseForge said.
+    async fn ensure_ok(resp: reqwest::Response, path: &str) -> AppResult<reqwest::Response> {
+        let status = resp.status().as_u16();
+        match status {
+            200..=299 => Ok(resp),
+            429 => Err(AppError::RateLimited),
+            401 | 403 => Err(AppError::Rejected {
+                status,
+                endpoint: path.to_string(),
+                detail: describe_failure(resp).await,
+            }),
+            code => {
+                let detail = describe_failure(resp).await;
+                let detail = if detail.is_empty() { String::new() } else { format!(" ({detail})") };
+                Err(AppError::Api(format!("{path} returned HTTP {code}{detail}")))
+            }
         }
     }
 
     async fn get<T: DeserializeOwned>(&self, path: &str, query: &[(&str, String)]) -> AppResult<T> {
         let resp = self
             .http
-            .get(format!("{API_BASE}{path}"))
+            .get(format!("{}{path}", self.base))
             .header("x-api-key", &self.key)
             .header("Accept", "application/json")
             .query(query)
             .send()
             .await?;
-        Self::check_status(resp.status(), path)?;
+        let resp = Self::ensure_ok(resp, path).await?;
         Ok(resp.json::<T>().await?)
     }
 
-    /// Checks the key with a cheap request.
-    pub async fn validate_key(&self) -> AppResult<()> {
-        let _: serde_json::Value = self.get(&format!("/v1/games/{WOW_GAME_ID}"), &[]).await?;
-        Ok(())
+    async fn probe(&self, path: &str, query: &[(&str, &str)]) -> Probe {
+        let endpoint = if query.is_empty() {
+            path.to_string()
+        } else {
+            let q: Vec<String> = query.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            format!("{path}?{}", q.join("&"))
+        };
+        let sent = self
+            .http
+            .get(format!("{}{path}", self.base))
+            .header("x-api-key", &self.key)
+            .header("Accept", "application/json")
+            .query(query)
+            .send()
+            .await;
+        match sent {
+            Ok(resp) if resp.status().is_success() => {
+                Probe { ok: true, status: Some(resp.status().as_u16()), endpoint, detail: String::new() }
+            }
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                Probe { ok: false, status: Some(status), endpoint, detail: describe_failure(resp).await }
+            }
+            Err(e) => Probe { ok: false, status: None, endpoint, detail: e.to_string() },
+        }
+    }
+
+    /// Tests the key against a general endpoint and the WoW addon search.
+    pub async fn diagnose_key(&self) -> KeyCheck {
+        let wow_game = WOW_GAME_ID.to_string();
+        let general_q = [("pageSize", "1")];
+        let wow_q = [("gameId", wow_game.as_str()), ("pageSize", "1")];
+        let (general, wow) = tokio::join!(
+            self.probe("/v1/games", &general_q),
+            self.probe("/v1/mods/search", &wow_q),
+        );
+        KeyCheck::new(general, wow)
     }
 
     pub async fn version_types(&self) -> AppResult<Vec<GameVersionType>> {
@@ -422,13 +582,13 @@ impl CurseForge {
         }
         let resp = self
             .http
-            .post(format!("{API_BASE}/v1/mods"))
+            .post(format!("{}/v1/mods", self.base))
             .header("x-api-key", &self.key)
             .header("Accept", "application/json")
             .json(&serde_json::json!({ "modIds": ids, "filterPcOnly": true }))
             .send()
             .await?;
-        Self::check_status(resp.status(), "/v1/mods")?;
+        let resp = Self::ensure_ok(resp, "/v1/mods").await?;
         let e: Envelope<Vec<Mod>> = resp.json().await?;
         Ok(e.data)
     }
@@ -458,14 +618,15 @@ impl CurseForge {
         let path = format!("/v1/mods/{mod_id}/files/{file_id}/download-url");
         let resp = self
             .http
-            .get(format!("{API_BASE}{path}"))
+            .get(format!("{}{path}", self.base))
             .header("x-api-key", &self.key)
             .send()
             .await?;
-        match resp.status().as_u16() {
-            403 | 404 => return Ok(None),
-            _ => Self::check_status(resp.status(), &path)?,
+        // 403/404 here means the author disallows third-party downloads.
+        if matches!(resp.status().as_u16(), 403 | 404) {
+            return Ok(None);
         }
+        let resp = Self::ensure_ok(resp, &path).await?;
         let e: Envelope<Option<String>> = resp.json().await?;
         Ok(e.data.filter(|s| !s.is_empty()))
     }
@@ -478,6 +639,102 @@ impl CurseForge {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn sanitizes_pasted_keys() {
+        let k = "$2a$10$abcDEF123";
+        assert_eq!(sanitize_key(k).unwrap(), k);
+        assert_eq!(sanitize_key(&format!("  {k}\r\n")).unwrap(), k);
+        assert_eq!(sanitize_key(&format!("\"{k}\"")).unwrap(), k);
+        assert_eq!(sanitize_key(&format!("x-api-key: {k}")).unwrap(), k);
+        assert_eq!(sanitize_key("$2a$10$ abc\u{200B}DEF123").unwrap(), k);
+        assert_eq!(sanitize_key("   ").unwrap(), "");
+        assert!(sanitize_key("abcé123").is_err());
+    }
+
+    fn probe(ok: bool, status: Option<u16>, detail: &str) -> Probe {
+        Probe { ok, status, endpoint: "/x".into(), detail: detail.into() }
+    }
+
+    #[test]
+    fn hints_match_the_failure() {
+        let ok = probe(true, Some(200), "");
+        let c = KeyCheck::new(ok.clone(), ok.clone());
+        assert!(c.hint.contains("works") && !c.has_http_failure());
+        let c = KeyCheck::new(ok.clone(), probe(false, Some(403), "response: Forbidden"));
+        assert!(c.hint.contains("World of Warcraft") && c.has_http_failure());
+        let c = KeyCheck::new(probe(false, Some(401), ""), probe(false, Some(401), ""));
+        assert!(c.hint.contains("doesn't recognize"));
+        let c = KeyCheck::new(probe(false, Some(403), "x-cache: Error from cloudfront"), probe(false, Some(403), ""));
+        assert!(c.hint.contains("revoked") && c.hint.contains("CDN"));
+        let c = KeyCheck::new(probe(false, Some(429), ""), ok.clone());
+        assert!(c.hint.contains("rate-limiting"));
+        let c = KeyCheck::new(probe(false, None, "dns error"), probe(false, None, "dns error"));
+        assert!(c.hint.contains("Couldn't reach") && !c.has_http_failure());
+    }
+
+    /// Minimal fake CurseForge: "goodkey" may use /v1/games, WoW search is
+    /// refused by the "CDN", and any other key gets 401.
+    async fn fake_curseforge() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let path = req.split_whitespace().nth(1).unwrap_or("").to_string();
+                    let good = req.lines().any(|l| l.eq_ignore_ascii_case("x-api-key: goodkey"));
+                    let (status, extra, body) = if !good {
+                        ("401 Unauthorized", "", "{\"error\":\"Unauthorized\"}")
+                    } else if path.starts_with("/v1/mods/search") {
+                        ("403 Forbidden", "x-cache: Error from cloudfront\r\n", "{\"message\":\"Forbidden\"}")
+                    } else {
+                        ("200 OK", "", "{\"data\":[]}")
+                    };
+                    let resp = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn local_client() -> reqwest::Client {
+        reqwest::Client::builder().no_proxy().build().unwrap()
+    }
+
+    #[tokio::test]
+    async fn diagnoses_wow_refusal_and_bad_key() {
+        let base = fake_curseforge().await;
+
+        let good = CurseForge::with_base(local_client(), "goodkey".into(), base.clone());
+        let c = good.diagnose_key().await;
+        assert!(c.general.ok, "{c:?}");
+        assert!(!c.wow.ok);
+        assert_eq!(c.wow.status, Some(403));
+        assert!(c.wow.detail.contains("Forbidden") && c.wow.detail.contains("cloudfront"), "{}", c.wow.detail);
+        assert!(c.hint.contains("World of Warcraft"));
+
+        let bad = CurseForge::with_base(local_client(), "nope".into(), base.clone());
+        let c = bad.diagnose_key().await;
+        assert_eq!(c.general.status, Some(401));
+        assert!(c.hint.contains("doesn't recognize"));
+
+        // Regular calls keep the status and CurseForge's answer in the error.
+        let err = bad.version_types().await.unwrap_err();
+        let msg = err.to_string();
+        assert!(matches!(err, AppError::Rejected { status: 401, .. }), "{msg}");
+        assert!(msg.contains("HTTP 401") && msg.contains("Unauthorized"), "{msg}");
+        let err = good.search(1, None, None, "", 2, 0).await.unwrap_err().to_string();
+        assert!(err.contains("HTTP 403") && err.contains("cloudfront"), "{err}");
+    }
 
     fn file(id: u32, date: &str, rt: u8, types: &[u32]) -> File {
         File {

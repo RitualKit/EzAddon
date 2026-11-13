@@ -62,6 +62,19 @@ EzAddon is built to stay light:
 
   <sub>*Working set also counts DLLs shared with Edge and Windows, so it overstates the real cost.</sub>
 
+## Troubleshooting: API key not accepted, or search doesn't work
+
+EzAddon tests your key with two requests: one any valid key may make, and the World of Warcraft addon search it actually needs. The result appears under the key field. You can run it again any time with **Settings → Test key**.
+
+- **HTTP 401 (key not recognized):** copy the key again from [console.curseforge.com](https://console.curseforge.com/) using its copy button, or generate a new one.
+- **HTTP 403 on both checks:** the key was refused. It may be revoked or not active yet. Generate a new key in the console. Some people have also had to rename their console organization before a new key worked.
+- **General access ✓ but World of Warcraft ✗ (HTTP 403):** the key works, but CurseForge refuses WoW requests for it. Check your project in the console, or generate a new key.
+- **A response mentioning CloudFront or Cloudflare:** CurseForge's CDN refused the request. This can also mean your network or IP is being blocked or rate-limited. Try again later or on another network.
+- **HTTP 429:** CurseForge is rate-limiting you. Wait a minute.
+- **No response:** check your internet connection, firewall, antivirus or proxy.
+
+If the check fails you can still click **Save anyway** and browse; any error then shows CurseForge's exact answer. **Copy details** copies the full check (never the key itself) so you can include it in a bug report.
+
 ## System tray
 
 - **Left-click** the tray icon to open EzAddon.

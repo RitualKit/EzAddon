@@ -166,4 +166,5 @@
   .list { display: flex; flex-direction: column; gap: 6px; }
   .more { display: flex; justify-content: center; padding: 18px; min-height: 70px; }
   .empty { padding: 60px 16px; text-align: center; }
+  .empty p { user-select: text; max-width: 720px; margin: 0 auto 14px; overflow-wrap: anywhere; }
 </style>
