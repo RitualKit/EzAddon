@@ -1,0 +1,6 @@
+# Pin the Rust version so local builds and CI use the same compiler and the
+# same Clippy lints (a newer Clippy can otherwise fail CI without code changes).
+[toolchain]
+channel = "1.100.0"
+components = ["clippy"]
+profile = "minimal"
