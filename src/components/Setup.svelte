@@ -11,7 +11,7 @@
 </div>
 
 <style>
-  .setup { height: 100%; padding: 32px 16px; }
+  .setup { height: 100%; padding: 40px 24px; }
   .intro { max-width: 720px; margin: 0 auto 16px; }
   .intro h2 { font-size: 22px; }
   .intro p { margin: 6px 0 0; }

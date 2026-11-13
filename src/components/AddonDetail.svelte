@@ -3,16 +3,19 @@
   import { api, formatBytes, formatCount, formatDate, RELEASE_LABEL, toAppError, type AddonDetail } from "../lib/api";
   import { app } from "../lib/state.svelte";
   import InstallButton from "./InstallButton.svelte";
+  import Icon from "./Icon.svelte";
 
   let { modId, onclose }: { modId: number; onclose: () => void } = $props();
 
   let detail = $state<AddonDetail | null>(null);
   let error = $state<string | null>(null);
+  let tab = $state<"description" | "files" | "images">("description");
 
   $effect(() => {
     const id = modId;
     detail = null;
     error = null;
+    tab = "description";
     api.detail(id).then(
       (d) => { if (id === modId) detail = d; },
       (e) => { if (id === modId) error = toAppError(e).message; },
@@ -20,7 +23,7 @@
   });
 
   // The description is author-written HTML: strip scripts, styles and anything
-  // active, and keep links inert so they can be opened in the real browser.
+  // active, and keep links inert so they open in the real browser.
   const html = $derived(
     detail
       ? DOMPurify.sanitize(detail.descriptionHtml, {
@@ -43,107 +46,140 @@
 
 <svelte:window onkeydown={(e) => e.key === "Escape" && onclose()} />
 
-<div class="backdrop" role="presentation" onclick={onclose}></div>
-<div class="drawer" role="dialog" aria-modal="true" aria-label="Addon details">
-  <button class="close ghost" aria-label="Close" onclick={onclose}>✕</button>
+<div class="page">
+  <div class="topbar">
+    <button class="ghost back" onclick={onclose}><Icon name="back" size={16} /> Back</button>
+  </div>
 
   {#if error}
-    <div class="pad"><p>{error}</p></div>
+    <div class="pad"><p>{error}</p><button class="outline" onclick={onclose}>Back</button></div>
   {:else if !detail}
-    <div class="pad muted"><span class="spinner"></span>&nbsp; Loading…</div>
+    <div class="pad muted"><span class="spinner"></span></div>
   {:else}
     {@const a = detail.addon}
-    <div class="head pad row">
-      {#if a.thumbnail}<img class="thumb big" src={a.thumbnail} alt="" />{/if}
+    <div class="hero">
+      {#if a.thumbnail}<img class="logo" src={a.thumbnail} alt="" />{:else}<div class="logo"></div>{/if}
       <div class="grow">
-        <h2>{a.name}</h2>
-        <div class="muted small">by {a.author} · ⬇ {formatCount(a.downloads)} downloads</div>
-        <div class="cats">{#each a.categories as c}<span class="badge">{c}</span>{/each}</div>
+        <h1>{a.name}</h1>
+        <div class="by">by <span>{a.author}</span></div>
+        <div class="metas">
+          <span class="meta"><Icon name="download" size={13} /> {formatCount(a.downloads)} downloads</span>
+          {#if a.dateModified}<span class="meta"><Icon name="clock" size={13} /> Updated {formatDate(a.dateModified)}</span>{/if}
+          {#if a.gameVersion}<span class="meta"><Icon name="game" size={13} /> {a.gameVersion}</span>{/if}
+        </div>
+        <div class="cats">{#each a.categories as c}<span class="tag">{c}</span>{/each}</div>
+      </div>
+      <div class="cta">
+        <InstallButton modId={a.id} name={a.name} available={detail.latestFile !== null && detail.allowDistribution} large />
+        {#if a.websiteUrl}
+          <button class="outline" onclick={() => a.websiteUrl && api.openUrl(a.websiteUrl)}>
+            <Icon name="external" size={14} /> CurseForge page
+          </button>
+        {/if}
+        {#if installed}<div class="dim small">Installed: {installed.displayName || installed.fileName}</div>{/if}
       </div>
     </div>
 
-    <div class="actions pad row">
-      <InstallButton modId={a.id} name={a.name} available={detail.latestFile !== null && detail.allowDistribution} />
-      {#if a.websiteUrl}
-        <button onclick={() => a.websiteUrl && api.openUrl(a.websiteUrl)}>View on CurseForge</button>
+    <div class="tabs">
+      <button class="tab" class:active={tab === "description"} onclick={() => (tab = "description")}>Description</button>
+      <button class="tab" class:active={tab === "files"} onclick={() => (tab = "files")}>Files</button>
+      {#if detail.screenshots.length}
+        <button class="tab" class:active={tab === "images"} onclick={() => (tab = "images")}>Images <span class="dim">{detail.screenshots.length}</span></button>
       {/if}
-      {#if installed}<span class="muted small">Installed: {installed.displayName || installed.fileName}</span>{/if}
     </div>
 
-    <div class="body scroll">
-      <div class="pad">
+    <div class="content scroll">
+      <div class="inner">
         {#if !detail.allowDistribution}
-          <p class="warn">The author doesn't allow downloads from third-party apps. Use "View on CurseForge" to download it.</p>
+          <p class="warn">The author doesn't allow downloads from third-party apps. Use "CurseForge page" to download it.</p>
         {/if}
-        {#if detail.latestFile}
-          {@const f = detail.latestFile}
-          <div class="file">
-            <div class="row">
-              <strong class="grow ellipsis">{f.displayName || f.fileName}</strong>
-              <span class="badge" class:good={f.releaseType === 1}>{RELEASE_LABEL[f.releaseType] ?? "File"}</span>
+
+        {#if tab === "description"}
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+          <div class="desc" onclick={onDescClick}>{@html html}</div>
+        {:else if tab === "files"}
+          {#if detail.latestFile}
+            {@const f = detail.latestFile}
+            <div class="file-table">
+              <div class="th"><span>Type</span><span>Name</span><span>Uploaded</span><span>Size</span><span>Game Version</span></div>
+              <div class="tr">
+                <span><span class="rt rt{f.releaseType}">{(RELEASE_LABEL[f.releaseType] ?? "?")[0]}</span></span>
+                <span class="ellipsis" title={f.fileName}>{f.displayName || f.fileName}</span>
+                <span>{formatDate(f.fileDate)}</span>
+                <span>{formatBytes(f.fileLength)}</span>
+                <span>{f.gameVersions.join(", ") || "Forever"}</span>
+              </div>
             </div>
-            <div class="muted small">
-              {[formatDate(f.fileDate), formatBytes(f.fileLength), f.gameVersions.length ? `WoW ${f.gameVersions.join(", ")}` : ""]
-                .filter(Boolean)
-                .join(" · ")}
+            <p class="dim small">This is the file EzAddon installs for WoW Forever with your release channel setting.</p>
+          {:else}
+            <p class="warn">No WoW Forever file has been uploaded for this addon yet.</p>
+          {/if}
+
+          {#if detail.dependencies.length}
+            <h3>Dependencies</h3>
+            <div class="deps">
+              {#each detail.dependencies as d}
+                <div class="dep row">
+                  <Icon name="puzzle" size={15} />
+                  <span class="grow">{d.name}</span>
+                  <span class="tag">{d.required ? "Required, installed automatically" : "Optional"}</span>
+                  {#if d.installed}<span class="tag good">Installed</span>{/if}
+                </div>
+              {/each}
             </div>
-          </div>
+          {/if}
         {:else}
-          <p class="warn">No WoW Forever file has been uploaded for this addon yet.</p>
-        {/if}
-
-        {#if detail.dependencies.length}
-          <h3>Dependencies</h3>
-          <ul class="deps">
-            {#each detail.dependencies as d}
-              <li class="row">
-                <span class="grow">{d.name}</span>
-                <span class="badge">{d.required ? "Required, installed automatically" : "Optional"}</span>
-                {#if d.installed}<span class="badge good">Installed</span>{/if}
-              </li>
-            {/each}
-          </ul>
-        {/if}
-
-        {#if detail.screenshots.length}
           <div class="shots">
-            {#each detail.screenshots.slice(0, 6) as s}
-              {#if s.thumbnailUrl}<img src={s.thumbnailUrl} alt={s.title ?? ""} loading="lazy" />{/if}
+            {#each detail.screenshots as s}
+              {#if s.thumbnailUrl}
+                <button class="shot" onclick={() => s.url && api.openUrl(s.url)} title={s.title ?? ""}>
+                  <img src={s.thumbnailUrl} alt={s.title ?? ""} loading="lazy" />
+                </button>
+              {/if}
             {/each}
           </div>
         {/if}
-
-        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-        <div class="desc" onclick={onDescClick}>{@html html}</div>
       </div>
     </div>
   {/if}
 </div>
 
 <style>
-  .backdrop { position: fixed; inset: 0; background: #0007; z-index: 20; }
-  .drawer {
-    position: fixed; top: 0; right: 0; bottom: 0; width: min(640px, 92vw); z-index: 21;
-    background: var(--bg-2); border-left: 1px solid var(--line); display: flex; flex-direction: column;
-    box-shadow: -12px 0 32px #0009; animation: slide 0.16s ease-out;
-  }
-  @keyframes slide { from { transform: translateX(24px); opacity: 0; } }
-  .close { position: absolute; top: 10px; right: 10px; color: var(--muted); }
-  .pad { padding: 16px 20px; }
-  .head { padding-right: 52px; align-items: flex-start; gap: 14px; }
-  .big { width: 72px; height: 72px; }
-  .cats { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
-  .actions { padding-top: 0; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
-  .body { flex: 1; user-select: text; }
-  .file { padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 14px; }
+  .page { height: 100%; display: flex; flex-direction: column; background: var(--bg); }
+  .topbar { padding: 10px 16px 0; }
+  .back { color: var(--muted); padding: 6px 10px; }
+  .back:hover:not(:disabled) { color: var(--text); }
+  .pad { padding: 24px; }
+  .hero { display: flex; gap: 18px; padding: 10px 28px 18px; align-items: flex-start; }
+  .logo { width: 96px; height: 96px; border-radius: 6px; object-fit: cover; background: var(--panel-2); flex: none; box-shadow: 0 6px 18px #0008; }
+  h1 { font-size: 24px; line-height: 1.2; }
+  .by { color: var(--dim); font-size: 13px; margin: 2px 0 8px; }
+  .by span { color: var(--muted); }
+  .metas { display: flex; gap: 16px; flex-wrap: wrap; }
+  .cats { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .cta { display: flex; flex-direction: column; gap: 8px; align-items: stretch; min-width: 170px; }
+  .tabs { display: flex; gap: 22px; padding: 0 28px; border-bottom: 1px solid var(--line); }
+  .tab { background: transparent; border-radius: 0; padding: 10px 2px 11px; color: var(--muted); border-bottom: 2px solid transparent; }
+  .tab:hover:not(:disabled) { background: transparent; color: var(--text); }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .content { flex: 1; user-select: text; }
+  .inner { padding: 20px 28px 32px; max-width: 980px; }
   .warn { color: var(--accent); margin-top: 0; }
-  h3 { font-size: 14px; margin: 6px 0 8px; }
-  .deps { list-style: none; padding: 0; margin: 0 0 14px; display: grid; gap: 6px; }
-  .shots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
-  .shots img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 6px; background: var(--panel); }
-  .desc { overflow-wrap: anywhere; }
+  h3 { font-size: 15px; margin: 22px 0 10px; }
+  .file-table { background: var(--panel); border-radius: var(--radius); overflow: hidden; margin-bottom: 10px; }
+  .th, .tr { display: grid; grid-template-columns: 60px 1fr 130px 90px 130px; gap: 12px; padding: 10px 14px; align-items: center; }
+  .th { font-size: 12px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; background: var(--panel-2); }
+  .rt { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 4px; font-weight: 800; font-size: 12px; color: #fff; }
+  .rt1 { background: #2e9c5e; } .rt2 { background: #3b76d6; } .rt3 { background: #b9472f; }
+  .deps { display: grid; gap: 6px; }
+  .dep { padding: 10px 12px; background: var(--panel); border-radius: var(--radius); color: var(--muted); }
+  .dep .grow { color: var(--text); }
+  .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+  .shot { padding: 0; background: var(--panel); border-radius: var(--radius); overflow: hidden; }
+  .shot img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; display: block; }
+  .desc { overflow-wrap: anywhere; color: #d6d6db; }
   .desc :global(img) { max-width: 100%; height: auto; }
-  .desc :global(h1), .desc :global(h2), .desc :global(h3) { margin: 14px 0 6px; font-size: 15px; }
+  .desc :global(h1), .desc :global(h2), .desc :global(h3) { margin: 18px 0 8px; font-size: 16px; color: var(--text); }
   .desc :global(table) { border-collapse: collapse; max-width: 100%; }
   .desc :global(td), .desc :global(th) { border: 1px solid var(--line); padding: 4px 6px; }
   .desc :global(pre), .desc :global(code) { background: var(--panel); border-radius: 4px; padding: 1px 4px; white-space: pre-wrap; }

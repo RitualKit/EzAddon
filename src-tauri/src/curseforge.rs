@@ -77,6 +77,7 @@ pub struct Author {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct FileIndex {
+    pub game_version: String,
     pub file_id: u32,
     pub filename: String,
     pub release_type: u8,
@@ -207,11 +208,13 @@ pub struct AddonSummary {
     pub categories: Vec<String>,
     pub website_url: Option<String>,
     pub latest_file_id: Option<u32>,
+    pub game_version: Option<String>,
     pub date_modified: Option<String>,
 }
 
 impl AddonSummary {
     pub fn from_mod(m: &Mod, type_id: u32, max_release: u8) -> Self {
+        let latest = latest_index_for_type(m, type_id, max_release);
         AddonSummary {
             id: m.id,
             name: m.name.clone(),
@@ -224,7 +227,8 @@ impl AddonSummary {
                 .and_then(|l| l.thumbnail_url.clone().or_else(|| l.url.clone())),
             categories: m.categories.iter().map(|c| c.name.clone()).collect(),
             website_url: m.links.website_url.clone(),
-            latest_file_id: latest_index_for_type(m, type_id, max_release).map(|i| i.file_id),
+            latest_file_id: latest.map(|i| i.file_id),
+            game_version: latest.map(|i| i.game_version.clone()).filter(|v| !v.is_empty()),
             date_modified: m.date_modified.clone(),
         }
     }

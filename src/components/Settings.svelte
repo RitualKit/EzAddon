@@ -65,6 +65,7 @@
 
 <div class="settings scroll" class:setup>
   <div class="inner">
+    {#if !setup}<h1>Settings</h1>{/if}
     <section>
       <h2>CurseForge API key</h2>
       <p class="muted">
@@ -86,7 +87,7 @@
           {#if keyBusy}<span class="spinner"></span>{/if} Save key
         </button>
         {#if app.settings?.hasApiKey && !setup}
-          <button class="danger" disabled={keyBusy} onclick={() => { key = ""; saveKey(); }}>Remove</button>
+          <button class="outline danger" disabled={keyBusy} onclick={() => { key = ""; saveKey(); }}>Remove</button>
         {/if}
       </div>
       {#if keyError}<p class="err">{keyError}</p>{/if}
@@ -98,8 +99,8 @@
       <p class="muted">Addons are installed into <code>World of Warcraft\_forever_\Interface\AddOns</code>.</p>
       <div class="row">
         <input class="grow" placeholder="C:\Program Files (x86)\World of Warcraft" bind:value={path} onchange={() => save(true)} />
-        <button onclick={detect}>Detect</button>
-        <button onclick={browse}>Browse…</button>
+        <button class="outline" onclick={detect}>Detect</button>
+        <button class="outline" onclick={browse}>Browse…</button>
       </div>
       {#if pathError}<p class="err">{pathError}</p>{/if}
       {#if app.settings?.addonsPathValid}<p class="ok small">✓ {app.settings.addonsPath}</p>{/if}
@@ -124,7 +125,7 @@
         </p>
         <div class="row">
           <input placeholder="Automatic" inputmode="numeric" bind:value={override} style="width: 160px" />
-          <button onclick={() => save()}>Save</button>
+          <button class="outline" onclick={() => save()}>Save</button>
         </div>
       </section>
     {/if}
@@ -132,14 +133,14 @@
 </div>
 
 <style>
-  .settings { height: 100%; padding: 20px 16px; }
+  .settings { height: 100%; padding: 28px 24px; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
   .settings.setup { height: auto; padding: 0; }
   .inner { max-width: 720px; margin: 0 auto; display: grid; gap: 14px; }
-  section { padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+  section { padding: 18px 20px; background: var(--panel); border-radius: var(--radius); }
   h2 { font-size: 15px; margin-bottom: 4px; }
   p { margin: 4px 0 10px; }
   .err { color: var(--bad); margin: 8px 0 0; user-select: text; }
   .ok { color: var(--good); margin: 8px 0 0; overflow-wrap: anywhere; }
-  code { background: var(--bg-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
-  button { display: inline-flex; align-items: center; gap: 6px; }
+  code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 </style>

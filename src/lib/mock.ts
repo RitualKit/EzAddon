@@ -32,6 +32,7 @@ const addons: AddonSummary[] = Array.from({ length: 75 }, (_, i) => ({
   categories: [["Quests & Leveling"], ["Combat", "Damage Meters"], ["Bags & Inventory"]][i % 3],
   websiteUrl: "https://www.curseforge.com/wow/addons/example",
   latestFileId: 5000 + i,
+  gameVersion: "1.60.1",
   dateModified: new Date(Date.now() - i * 86400000).toISOString(),
 }));
 
