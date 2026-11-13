@@ -28,6 +28,7 @@ export interface AddonSummary {
   categories: string[];
   websiteUrl: string | null;
   latestFileId: number | null;
+  gameVersion: string | null;
   dateModified: string | null;
 }
 

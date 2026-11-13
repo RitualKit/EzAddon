@@ -3,7 +3,8 @@
   import { api, formatCount, SORTS, toAppError, type AddonSummary, type CategoryNode } from "../lib/api";
   import { showError } from "../lib/state.svelte";
   import CategoryTree from "./CategoryTree.svelte";
-  import AddonCard from "./AddonCard.svelte";
+  import AddonRow from "./AddonRow.svelte";
+  import Icon from "./Icon.svelte";
 
   let categories = $state<CategoryNode[]>([]);
   let categoryId = $state<number | null>(null);
@@ -77,52 +78,57 @@
 <div class="browse">
   <aside class="scroll">
     <div class="side-title row">
-      <span class="grow muted small">CATEGORIES</span>
-      <button class="ghost small" title="Reload categories" onclick={() => loadCategories(true)}>↻</button>
+      <span class="grow">Categories</span>
+      <button class="icon" title="Reload categories" onclick={() => loadCategories(true)}><Icon name="refresh" size={14} /></button>
     </div>
-    <button class="all ghost" class:active={categoryId === null} onclick={() => pick(null)}>All addons</button>
+    <button class="all" class:active={categoryId === null} onclick={() => pick(null)}>
+      <Icon name="grid" size={15} /> All Addons
+    </button>
     <CategoryTree nodes={categories} selected={categoryId} onselect={pick} />
   </aside>
 
   <section>
     <div class="toolbar row">
       <div class="search grow">
-        <span class="icon muted">⌕</span>
+        <span class="icon-in"><Icon name="search" size={16} /></span>
         <input
           type="search"
-          placeholder="Search WoW Forever addons…"
+          placeholder="Search addons"
           bind:value={query}
           oninput={onQuery}
           onkeydown={(e) => e.key === "Enter" && (clearTimeout(debounce), load(true))}
         />
       </div>
-      <select bind:value={sort} onchange={() => load(true)} aria-label="Sort by">
-        {#each SORTS as s}<option value={s.id}>{s.label}</option>{/each}
-      </select>
+      <label class="sort row">
+        <span class="dim small">Sort by</span>
+        <select bind:value={sort} onchange={() => load(true)}>
+          {#each SORTS as s}<option value={s.id}>{s.label}</option>{/each}
+        </select>
+      </label>
     </div>
 
-    <div class="meta muted small">
-      {#if categoryName}<strong>{categoryName}</strong> · {/if}
-      {#if !loading || results.length}{formatCount(total)} addon{total === 1 ? "" : "s"}{/if}
+    <div class="heading row">
+      <h2 class="grow ellipsis">{categoryName ?? "All Addons"}</h2>
+      {#if !loading || results.length}<span class="dim small">{formatCount(total)} results</span>{/if}
     </div>
 
     <div class="results scroll" bind:this={scroller}>
       {#if error}
         <div class="empty">
           <p>{error}</p>
-          <button onclick={() => load(true)}>Try again</button>
+          <button class="outline" onclick={() => load(true)}>Try again</button>
         </div>
       {:else if !loading && results.length === 0}
         <div class="empty muted">No WoW Forever addons match your search.</div>
       {:else}
-        <div class="grid">
-          {#each results as a (a.id)}<AddonCard addon={a} />{/each}
+        <div class="list">
+          {#each results as a (a.id)}<AddonRow addon={a} />{/each}
         </div>
         <div class="more">
           {#if loading}
-            <span class="muted"><span class="spinner"></span>&nbsp; Loading…</span>
+            <span class="spinner muted"></span>
           {:else if hasMore}
-            <button onclick={() => load(false)}>Load more</button>
+            <button class="outline" onclick={() => load(false)}>Load more</button>
           {/if}
         </div>
       {/if}
@@ -132,19 +138,25 @@
 
 <style>
   .browse { display: flex; height: 100%; }
-  aside { width: 230px; flex: none; padding: 12px 8px; border-right: 1px solid var(--line); background: var(--bg-2); }
-  .side-title { padding: 0 8px 6px; letter-spacing: 0.6px; }
-  .side-title button { padding: 0 6px; color: var(--muted); }
-  .all { width: 100%; text-align: left; padding: 6px 10px; color: var(--muted); margin-bottom: 2px; }
-  .all.active { color: var(--text); background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); }
+  aside { width: 240px; flex: none; padding: 16px 10px; border-right: 1px solid var(--line); background: var(--bg-2); }
+  .side-title { padding: 0 8px 8px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--dim); }
+  .side-title .icon { padding: 4px; }
+  .all {
+    width: 100%; justify-content: flex-start; padding: 7px 10px; margin-bottom: 2px;
+    background: transparent; color: var(--muted); font-weight: 500; gap: 9px;
+  }
+  .all:hover:not(:disabled) { background: var(--panel); color: var(--text); }
+  .all.active { background: var(--panel-2); color: var(--text); font-weight: 600; }
   section { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  .toolbar { padding: 12px 16px 6px; }
+  .toolbar { padding: 16px 24px 4px; gap: 12px; }
   .search { position: relative; }
-  .search input { width: 100%; padding-left: 30px; }
-  .search .icon { position: absolute; left: 10px; top: 50%; transform: translateY(-52%); font-size: 16px; }
-  .meta { padding: 2px 16px 8px; min-height: 26px; }
-  .results { flex: 1; padding: 0 16px 16px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
-  .more { display: flex; justify-content: center; padding: 16px; min-height: 64px; }
+  .search input { width: 100%; padding-left: 36px; height: 38px; }
+  .icon-in { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--dim); }
+  .sort select { height: 38px; min-width: 150px; }
+  .heading { padding: 14px 24px 10px; }
+  .heading h2 { font-size: 17px; }
+  .results { flex: 1; padding: 0 24px 20px; }
+  .list { display: flex; flex-direction: column; gap: 6px; }
+  .more { display: flex; justify-content: center; padding: 18px; min-height: 70px; }
   .empty { padding: 60px 16px; text-align: center; }
 </style>

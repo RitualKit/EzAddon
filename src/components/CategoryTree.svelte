@@ -22,15 +22,15 @@
     <li>
       <div class="item" class:active={selected === n.id} style:padding-left="{8 + depth * 14}px">
         {#if n.children.length}
-          <button class="twisty ghost" aria-label={expanded ? "Collapse" : "Expand"} onclick={() => (open[n.id] = !expanded)}>
+          <button class="twisty" aria-label={expanded ? "Collapse" : "Expand"} onclick={() => (open[n.id] = !expanded)}>
             {expanded ? "▾" : "▸"}
           </button>
         {:else}
           <span class="twisty"></span>
         {/if}
-        <button class="name ghost ellipsis" onclick={() => onselect(n.id)} title={n.name}>
+        <button class="name" onclick={() => onselect(n.id)} title={n.name}>
           {#if n.iconUrl}<img src={n.iconUrl} alt="" loading="lazy" width="16" height="16" />{/if}
-          {n.name}
+          <span class="ellipsis">{n.name}</span>
         </button>
       </div>
       {#if n.children.length && expanded}
@@ -42,15 +42,15 @@
 
 <style>
   ul { list-style: none; margin: 0; padding: 0; }
-  .item { display: flex; align-items: center; border-radius: 7px; }
-  .item:hover { background: var(--panel-2); }
-  .item.active { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); }
-  .item.active .name { color: var(--text); }
-  .twisty { width: 20px; flex: none; padding: 0; color: var(--muted); font-size: 11px; text-align: center; }
+  .item { display: flex; align-items: center; border-radius: 4px; margin-bottom: 1px; }
+  .item:hover { background: var(--panel); }
+  .item:hover .name { color: var(--text); }
+  .item.active { background: var(--panel-2); }
+  .item.active .name { color: var(--text); font-weight: 600; }
+  .twisty { width: 18px; flex: none; padding: 0; color: var(--dim); font-size: 10px; text-align: center; background: transparent !important; font-weight: 400; }
   .name {
-    flex: 1; text-align: left; padding: 5px 6px; color: var(--muted);
-    display: flex; align-items: center; gap: 7px; background: transparent !important;
+    flex: 1; justify-content: flex-start; padding: 6px 8px 6px 2px; color: var(--muted); font-weight: 500;
+    gap: 9px; background: transparent !important; min-width: 0;
   }
-  .name:hover { color: var(--text); }
   img { border-radius: 3px; flex: none; }
 </style>

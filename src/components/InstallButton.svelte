@@ -1,7 +1,8 @@
 <script lang="ts">
   import { app, install } from "../lib/state.svelte";
+  import Icon from "./Icon.svelte";
 
-  let { modId, name, available = true }: { modId: number; name: string; available?: boolean } = $props();
+  let { modId, name, available = true, large = false }: { modId: number; name: string; available?: boolean; large?: boolean } = $props();
 
   const installed = $derived(app.installed.find((a) => a.modId === modId));
   const hasUpdate = $derived(modId in app.updates);
@@ -17,20 +18,29 @@
 </script>
 
 {#if busy}
-  <button class="primary" disabled title={busy.name ? `${busy.name} (${busy.step}/${busy.steps})` : ""}>
-    <span class="spinner"></span> {label()}
+  <button class="primary busy" class:large disabled title={busy.name ? `${busy.name} (${busy.step}/${busy.steps})` : ""}>
+    {#if pct !== null}<span class="bar" style:width="{pct}%"></span>{/if}
+    <span class="lbl"><span class="spinner"></span> {label()}</span>
   </button>
 {:else if installed && hasUpdate}
-  <button class="primary" onclick={(e) => { e.stopPropagation(); install(modId, name); }}>Update</button>
+  <button class="primary" class:large onclick={(e) => { e.stopPropagation(); install(modId, name); }}>
+    <Icon name="refresh" size={14} /> Update
+  </button>
 {:else if installed}
-  <button disabled class="done">✓ Installed</button>
+  <button class="done" class:large disabled><Icon name="check" size={15} /> Installed</button>
 {:else if !available}
-  <button disabled title="No WoW Forever version is available">Unavailable</button>
+  <button class:large disabled title="No WoW Forever version is available">Unavailable</button>
 {:else}
-  <button class="primary" onclick={(e) => { e.stopPropagation(); install(modId, name); }}>Install</button>
+  <button class="primary" class:large onclick={(e) => { e.stopPropagation(); install(modId, name); }}>
+    <Icon name="download" size={14} /> Install
+  </button>
 {/if}
 
 <style>
-  button { min-width: 96px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
-  .done { color: var(--good); opacity: 1; }
+  button { min-width: 112px; height: 34px; position: relative; overflow: hidden; }
+  button.large { height: 40px; width: 100%; font-size: 15px; }
+  .done { color: var(--good); background: #16281f; opacity: 1; }
+  .busy { opacity: 1; background: #8a3a20; }
+  .bar { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); transition: width 0.15s; }
+  .lbl { position: relative; display: inline-flex; align-items: center; gap: 6px; }
 </style>
