@@ -9,6 +9,8 @@ export interface SettingsView {
   releaseChannel: number;
   versionTypeOverride: number | null;
   hasApiKey: boolean;
+  closeToTray: boolean;
+  notifyUpdates: boolean;
 }
 
 export interface CategoryNode {
@@ -121,10 +123,17 @@ export const SORTS = [
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 type Listen = (cb: (p: Progress) => void) => Promise<UnlistenFn>;
+type ListenUpdates = (cb: (u: UpdateInfo[]) => void) => Promise<UnlistenFn>;
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-let backend: Promise<{ invoke: Invoke; listenProgress: Listen; openUrl: (u: string) => Promise<void>; pickFolder: () => Promise<string | null> }>;
+let backend: Promise<{
+  invoke: Invoke;
+  listenProgress: Listen;
+  listenUpdates: ListenUpdates;
+  openUrl: (u: string) => Promise<void>;
+  pickFolder: () => Promise<string | null>;
+}>;
 
 // Both checks are build-time constants, so the mock is dropped from release
 // builds. VITE_MOCK=1 builds a production bundle with the mock, for profiling.
@@ -141,6 +150,7 @@ if ((import.meta.env.DEV || import.meta.env.VITE_MOCK === "1") && !isTauri) {
     return {
       invoke: invoke as Invoke,
       listenProgress: ((cb) => listen<Progress>("install-progress", (e) => cb(e.payload))) as Listen,
+      listenUpdates: ((cb) => listen<UpdateInfo[]>("updates-available", (e) => cb(e.payload))) as ListenUpdates,
       openUrl: (u: string) => opener.openUrl(u),
       pickFolder: async () => {
         const r = await dialog.open({ directory: true, multiple: false, title: "Choose your World of Warcraft folder" });
@@ -166,8 +176,14 @@ export function toAppError(e: unknown): AppError {
 
 export const api = {
   getSettings: () => call<SettingsView>("get_settings"),
-  saveSettings: (addonsPath: string | null, releaseChannel: number, versionTypeOverride: number | null) =>
-    call<SettingsView>("save_settings", { addonsPath, releaseChannel, versionTypeOverride }),
+  saveSettings: (
+    addonsPath: string | null,
+    releaseChannel: number,
+    versionTypeOverride: number | null,
+    closeToTray?: boolean,
+    notifyUpdates?: boolean,
+  ) =>
+    call<SettingsView>("save_settings", { addonsPath, releaseChannel, versionTypeOverride, closeToTray, notifyUpdates }),
   setApiKey: (key: string) => call<SettingsView>("set_api_key", { key }),
   detectWowPath: () => call<string | null>("detect_wow_path"),
   openAddonsFolder: () => call<void>("open_addons_folder"),
@@ -180,6 +196,8 @@ export const api = {
   listInstalled: () => call<InstalledAddon[]>("list_installed"),
   checkUpdates: () => call<UpdateInfo[]>("check_updates"),
   onProgress: async (cb: (p: Progress) => void) => (await backend).listenProgress(cb),
+  /** Results of the backend's background update checks. */
+  onUpdates: async (cb: (u: UpdateInfo[]) => void) => (await backend).listenUpdates(cb),
   openUrl: async (url: string) => (await backend).openUrl(url),
   pickFolder: async () => (await backend).pickFolder(),
 };

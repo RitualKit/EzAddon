@@ -111,6 +111,9 @@ export async function init() {
     await api.onProgress((p) => {
       if (app.busy[p.modId] && p.stage !== "done") app.busy[p.modId] = p;
     });
+    await api.onUpdates((list) => {
+      app.updates = Object.fromEntries(list.map((u) => [u.modId, u.latestFileId]));
+    });
   }
   app.settings = await api.getSettings();
   if (app.settings.addonsPathValid) await refreshInstalled();

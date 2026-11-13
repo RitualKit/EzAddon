@@ -64,6 +64,8 @@ let settings: SettingsView = {
   releaseChannel: 1,
   versionTypeOverride: null,
   hasApiKey: true,
+  closeToTray: true,
+  notifyUpdates: true,
 };
 let installed: InstalledAddon[] = [
   {
@@ -77,7 +79,16 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const handlers: Record<string, (a: any) => unknown> = {
   get_settings: () => settings,
-  save_settings: (a) => (settings = { ...settings, addonsPath: a.addonsPath, releaseChannel: a.releaseChannel, versionTypeOverride: a.versionTypeOverride, addonsPathValid: !!a.addonsPath }),
+  save_settings: (a) =>
+    (settings = {
+      ...settings,
+      addonsPath: a.addonsPath,
+      releaseChannel: a.releaseChannel,
+      versionTypeOverride: a.versionTypeOverride,
+      addonsPathValid: !!a.addonsPath,
+      closeToTray: a.closeToTray ?? settings.closeToTray,
+      notifyUpdates: a.notifyUpdates ?? settings.notifyUpdates,
+    }),
   set_api_key: (a) => (settings = { ...settings, hasApiKey: !!a.key }),
   detect_wow_path: () => "C:\\Program Files (x86)\\World of Warcraft\\_forever_\\Interface\\AddOns",
   open_addons_folder: () => null,
@@ -129,6 +140,7 @@ export const mockBackend = {
       if (i >= 0) listeners.splice(i, 1);
     };
   },
+  listenUpdates: async () => () => {},
   openUrl: async (u: string) => {
     window.open(u, "_blank");
   },

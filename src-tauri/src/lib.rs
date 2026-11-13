@@ -4,6 +4,7 @@ mod webview_memory;
 mod installer;
 mod manifest;
 mod settings;
+mod tray;
 mod wow;
 
 use curseforge::{
@@ -216,6 +217,8 @@ struct SettingsView {
     release_channel: u8,
     version_type_override: Option<u32>,
     has_api_key: bool,
+    close_to_tray: bool,
+    notify_updates: bool,
 }
 
 fn settings_view(s: &Settings) -> SettingsView {
@@ -225,6 +228,8 @@ fn settings_view(s: &Settings) -> SettingsView {
         release_channel: s.release_channel,
         version_type_override: s.version_type_override,
         has_api_key: settings::get_api_key(s).is_some(),
+        close_to_tray: s.close_to_tray,
+        notify_updates: s.notify_updates,
     }
 }
 
@@ -239,8 +244,16 @@ fn save_settings(
     addons_path: Option<String>,
     release_channel: u8,
     version_type_override: Option<u32>,
+    close_to_tray: Option<bool>,
+    notify_updates: Option<bool>,
 ) -> AppResult<SettingsView> {
     let mut s = state.settings.lock().unwrap();
+    if let Some(v) = close_to_tray {
+        s.close_to_tray = v;
+    }
+    if let Some(v) = notify_updates {
+        s.notify_updates = v;
+    }
     s.addons_path = addons_path
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty())
@@ -627,16 +640,23 @@ fn list_installed(state: State<'_, AppState>) -> AppResult<Vec<InstalledAddon>> 
     Ok(manifest.entries(&addons))
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct UpdateInfo {
+pub(crate) struct UpdateInfo {
     mod_id: u32,
     latest_file_id: u32,
     latest_file_name: String,
 }
 
 #[tauri::command]
-async fn check_updates(state: State<'_, AppState>) -> AppResult<Vec<UpdateInfo>> {
+async fn check_updates(app: AppHandle, state: State<'_, AppState>) -> AppResult<Vec<UpdateInfo>> {
+    let list = compute_updates(&state).await?;
+    tray::show_update_count(&app, list.len());
+    Ok(list)
+}
+
+/// Compares installed addons with CurseForge's latest WoW Forever files.
+pub(crate) async fn compute_updates(state: &AppState) -> AppResult<Vec<UpdateInfo>> {
     let cf = state.client()?;
     let addons = state.addons_path()?;
     let type_id = state.forever_type(&cf).await?;
@@ -663,7 +683,10 @@ async fn check_updates(state: State<'_, AppState>) -> AppResult<Vec<UpdateInfo>>
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
+        // Must be first: a second launch just reopens the running instance.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_main(app)))
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -714,6 +737,11 @@ pub fn run() {
                     let _ = tokio::join!(state.forever_type(&cf), state.categories(&cf, false));
                 }
             });
+
+            // Without a tray (e.g. no shell running), closing the window just exits.
+            if let Err(e) = tray::setup(app) {
+                eprintln!("system tray unavailable: {e}");
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -737,6 +765,18 @@ pub fn run() {
             list_installed,
             check_updates,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running EzAddon");
+        .build(tauri::generate_context!())
+        .expect("error while building EzAddon");
+
+    app.run(|app, event| {
+        // Closing the last window asks the app to exit (with no exit code).
+        // In tray mode the window, and the WebView2 processes behind it, are
+        // gone but EzAddon keeps running in the tray. Quit from the tray menu
+        // calls exit(0), which carries a code and is let through.
+        if let tauri::RunEvent::ExitRequested { api, code: None, .. } = event {
+            if tray::is_available() && app.state::<AppState>().settings().close_to_tray {
+                api.prevent_exit();
+            }
+        }
+    });
 }

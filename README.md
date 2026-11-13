@@ -16,6 +16,7 @@ A small, fast Windows app for finding and installing **World of Warcraft: Foreve
 - Sort by popularity, downloads, last updated, newest or name.
 - Install with one click. Required dependencies are installed automatically.
 - See what you've installed, check for updates, update one addon or all of them, and uninstall.
+- Close to the system tray. EzAddon checks for addon updates in the background and shows a Windows notification when there are new ones.
 - It only shows WoW Forever. Retail, Classic and other games are hidden.
 
 It's built with [Tauri](https://tauri.app) and Svelte, so it uses Windows' built-in WebView2 instead of bundling a browser. The installer is a few MB and the app uses far less memory than Electron-based managers. It does nothing in the background while it's idle.
@@ -36,7 +37,10 @@ It's built with [Tauri](https://tauri.app) and Svelte, so it uses Windows' built
 
 EzAddon is built to stay light:
 
-- **No background activity.** There is no tray icon, background service or polling. Update checks run only when you open **My Addons** or click **Check for Updates**. Closing the window exits the app completely.
+- **Tiny in the tray.**
+  - Closing the window to the tray destroys the window and its WebView2 processes instead of hiding them. Only the small native process stays running, and the window is rebuilt when you reopen it.
+  - In the tray, EzAddon checks for updates once every 6 hours (first check 10 minutes after launch) and is otherwise idle.
+  - Turn off **Close to tray** in Settings to have closing the window exit the app, or quit any time from the tray menu.
 - **Small footprint.**
   - The app is a ~5 MB native binary that uses Windows' built-in WebView2, so it ships no browser of its own. The UI bundle is ~42 KB gzipped.
   - While the window is minimized, WebView2 is asked to trim its memory.
@@ -55,6 +59,13 @@ EzAddon is built to stay light:
   | Private memory (what Task Manager counts) | 4.9 MB | **~105 MB** |
   | Working set (includes DLLs shared with Edge/Windows) | 30 MB | ~315 MB active, ~275 MB minimized |
   | CPU while idle | | 0.04 % |
+
+## System tray
+
+- **Left-click** the tray icon to open EzAddon.
+- **Right-click** it for **Open EzAddon**, **Check for updates** and **Quit EzAddon**.
+- The icon's tooltip shows how many addon updates are available.
+- Launching EzAddon again while it's in the tray reopens the existing window instead of starting a second copy.
 
 ## How installs work
 

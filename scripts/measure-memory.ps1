@@ -1,5 +1,6 @@
 # Starts EzAddon, then reports memory and CPU for the app and all of its
-# WebView2 child processes: while active, and again after minimizing.
+# WebView2 child processes: while active, after minimizing, and after the
+# window is closed to the system tray.
 param([Parameter(Mandatory)] [string] $Exe, [int] $SettleSeconds = 15)
 
 $ErrorActionPreference = "Stop"
@@ -54,4 +55,12 @@ $app.Refresh()
 Start-Sleep -Seconds 5
 Report "Minimized (WebView2 memory target: low)"
 
-Stop-Process -Id $app.Id -Force
+[void]$app.CloseMainWindow()   # WM_CLOSE, like clicking the X
+Start-Sleep -Seconds 5
+if ($app.HasExited) {
+  Write-Host "App exited on close (tray unavailable on this machine)."
+} else {
+  Report "Closed to tray (window and WebView2 shut down)"
+}
+
+if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }

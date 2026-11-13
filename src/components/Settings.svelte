@@ -11,6 +11,8 @@
   let path = $state(app.settings?.addonsPath ?? "");
   let channel = $state(app.settings?.releaseChannel ?? 1);
   let override = $state(app.settings?.versionTypeOverride?.toString() ?? "");
+  let closeToTray = $state(app.settings?.closeToTray ?? true);
+  let notifyUpdates = $state(app.settings?.notifyUpdates ?? true);
   let pathError = $state<string | null>(null);
 
   async function saveKey() {
@@ -31,7 +33,13 @@
     pathError = null;
     const ov = override.trim() ? Number(override.trim()) : null;
     try {
-      app.settings = await api.saveSettings(path.trim() || null, channel, ov !== null && Number.isFinite(ov) ? ov : null);
+      app.settings = await api.saveSettings(
+        path.trim() || null,
+        channel,
+        ov !== null && Number.isFinite(ov) ? ov : null,
+        closeToTray,
+        notifyUpdates,
+      );
       path = app.settings.addonsPath ?? "";
       if (path && !app.settings.addonsPathValid) {
         pathError = "No WoW Forever install was found there. Choose your World of Warcraft folder (the one that contains _forever_).";
@@ -118,6 +126,26 @@
       </section>
 
       <section>
+        <h2>System tray</h2>
+        <label class="toggle">
+          <input type="checkbox" bind:checked={closeToTray} onchange={() => save()} />
+          <span>
+            <strong>Close to tray</strong>
+            <span class="muted small">
+              Closing the window keeps EzAddon in the system tray, using only a few MB. Quit from the tray menu.
+            </span>
+          </span>
+        </label>
+        <label class="toggle">
+          <input type="checkbox" bind:checked={notifyUpdates} onchange={() => save()} />
+          <span>
+            <strong>Notify me about addon updates</strong>
+            <span class="muted small">Checks every 6 hours in the background and shows a Windows notification.</span>
+          </span>
+        </label>
+      </section>
+
+      <section>
         <h2>Advanced</h2>
         <p class="muted small">
           CurseForge's WoW Forever game-version id. Leave it empty to look it up automatically.
@@ -142,5 +170,8 @@
   p { margin: 4px 0 10px; }
   .err { color: var(--bad); margin: 8px 0 0; user-select: text; }
   .ok { color: var(--good); margin: 8px 0 0; overflow-wrap: anywhere; }
+  .toggle { display: flex; gap: 12px; align-items: flex-start; padding: 8px 0; cursor: pointer; }
+  .toggle input { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); flex: none; cursor: pointer; }
+  .toggle > span { display: flex; flex-direction: column; gap: 2px; }
   code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 </style>

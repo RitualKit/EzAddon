@@ -13,13 +13,15 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
-tauri = { version = "2.12", features = [] }
+tauri = { version = "2.12", features = ["tray-icon"] }
 tauri-plugin-dialog = "2.8"
 tauri-plugin-opener = "2.7"
+tauri-plugin-single-instance = "2.5"
+tauri-plugin-notification = "2.8"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["sync", "fs", "io-util", "macros"] }
+tokio = { version = "1", features = ["sync", "fs", "io-util", "macros", "time"] }
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "json", "query", "stream", "gzip", "system-proxy"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }

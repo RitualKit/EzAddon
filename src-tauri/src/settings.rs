@@ -16,6 +16,10 @@ pub struct Settings {
     pub release_channel: u8,
     /// Overrides the CurseForge WoW Forever game-version type id.
     pub version_type_override: Option<u32>,
+    /// Closing the window keeps EzAddon in the system tray instead of exiting.
+    pub close_to_tray: bool,
+    /// Check for addon updates in the background and show a notification.
+    pub notify_updates: bool,
     #[cfg(not(windows))]
     pub api_key: Option<String>,
 }
@@ -26,6 +30,8 @@ impl Default for Settings {
             addons_path: None,
             release_channel: 1,
             version_type_override: None,
+            close_to_tray: true,
+            notify_updates: true,
             #[cfg(not(windows))]
             api_key: None,
         }
