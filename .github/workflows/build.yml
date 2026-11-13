@@ -74,10 +74,10 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/msi/*.msi
           if-no-files-found: error
-      # Every push to the default branch replaces the "latest" pre-release, so
+      # Every push to (or manual run on) the default branch replaces the "latest" pre-release, so
       # releases/download/latest/EzAddon-setup.exe always points at the newest build.
       - name: Publish rolling "latest" build
-        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref_name == github.event.repository.default_branch
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
