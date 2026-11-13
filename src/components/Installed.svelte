@@ -114,7 +114,10 @@
     padding: 8px 14px; font-size: 12px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 0.6px;
     position: sticky; top: 0; background: var(--bg); z-index: 1;
   }
-  .tr { padding: 10px 14px; background: var(--panel); border-radius: var(--radius); margin-bottom: 6px; }
+  .tr {
+    padding: 10px 14px; background: var(--panel); border-radius: var(--radius); margin-bottom: 6px;
+    content-visibility: auto; contain-intrinsic-size: auto 64px;
+  }
   .tr:hover { background: #232329; }
   .addon { justify-content: flex-start; gap: 12px; background: transparent !important; padding: 0; min-width: 0; text-align: left; }
   .addon .thumb { width: 44px; height: 44px; }

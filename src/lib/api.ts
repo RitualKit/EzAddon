@@ -126,9 +126,9 @@ const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 
 let backend: Promise<{ invoke: Invoke; listenProgress: Listen; openUrl: (u: string) => Promise<void>; pickFolder: () => Promise<string | null> }>;
 
-// `import.meta.env.DEV` is a build-time constant, so the mock is dropped from
-// production builds.
-if (import.meta.env.DEV && !isTauri) {
+// Both checks are build-time constants, so the mock is dropped from release
+// builds. VITE_MOCK=1 builds a production bundle with the mock, for profiling.
+if ((import.meta.env.DEV || import.meta.env.VITE_MOCK === "1") && !isTauri) {
   backend = import("./mock").then((m) => m.mockBackend);
 } else {
   backend = (async () => {

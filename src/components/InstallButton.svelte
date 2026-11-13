@@ -4,7 +4,7 @@
 
   let { modId, name, available = true, large = false }: { modId: number; name: string; available?: boolean; large?: boolean } = $props();
 
-  const installed = $derived(app.installed.find((a) => a.modId === modId));
+  const installed = $derived(app.installedById[modId]);
   const hasUpdate = $derived(modId in app.updates);
   const busy = $derived(app.busy[modId]);
   const pct = $derived(busy?.total ? Math.round((busy.received / busy.total) * 100) : null);

@@ -1,5 +1,6 @@
 mod curseforge;
 mod error;
+mod webview_memory;
 mod installer;
 mod manifest;
 mod settings;
@@ -13,18 +14,50 @@ use error::{AppError, AppResult};
 use manifest::{manifest_path, InstalledAddon, Manifest};
 use serde::{Deserialize, Serialize};
 use settings::Settings;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const CATEGORY_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+/// Addon pages kept in memory so going back and forth is instant.
+const DETAIL_CACHE_SIZE: usize = 8;
+const DETAIL_TTL: Duration = Duration::from_secs(5 * 60);
 
 struct CategoryCache {
     at: Instant,
     class_id: Option<u32>,
-    tree: Vec<CategoryNode>,
+    /// Shared so serving it to the UI or a search never copies the tree.
+    tree: Arc<Vec<CategoryNode>>,
+}
+
+/// A small, bounded cache of recently viewed addon pages (oldest evicted first).
+#[derive(Default)]
+struct DetailCache {
+    entries: VecDeque<(u32, u8, Instant, Arc<AddonDetail>)>,
+}
+
+impl DetailCache {
+    fn get(&mut self, mod_id: u32, channel: u8) -> Option<Arc<AddonDetail>> {
+        self.entries.retain(|e| e.2.elapsed() < DETAIL_TTL);
+        self.entries
+            .iter()
+            .find(|e| e.0 == mod_id && e.1 == channel)
+            .map(|e| e.3.clone())
+    }
+
+    fn put(&mut self, mod_id: u32, channel: u8, d: Arc<AddonDetail>) {
+        self.entries.retain(|e| e.0 != mod_id);
+        if self.entries.len() >= DETAIL_CACHE_SIZE {
+            self.entries.pop_front();
+        }
+        self.entries.push_back((mod_id, channel, Instant::now(), d));
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
 }
 
 pub struct AppState {
@@ -35,6 +68,10 @@ pub struct AppState {
     http: reqwest::Client,
     forever_type: Mutex<Option<u32>>,
     categories: Mutex<Option<CategoryCache>>,
+    details: Mutex<DetailCache>,
+    /// Makes concurrent callers share one network lookup instead of each
+    /// fetching the same version types or categories.
+    lookup_lock: tokio::sync::Mutex<()>,
     /// Lets only one install, update or uninstall run at a time.
     install_lock: tokio::sync::Mutex<()>,
 }
@@ -78,6 +115,10 @@ impl AppState {
         if let Some(id) = *self.forever_type.lock().unwrap() {
             return Ok(id);
         }
+        let _single = self.lookup_lock.lock().await;
+        if let Some(id) = *self.forever_type.lock().unwrap() {
+            return Ok(id);
+        }
         match cf.version_types().await {
             Ok(types) => {
                 let id = curseforge::find_forever_type(&types).unwrap_or(FALLBACK_FOREVER_TYPE_ID);
@@ -89,12 +130,26 @@ impl AppState {
         }
     }
 
-    async fn categories(&self, cf: &CurseForge, refresh: bool) -> AppResult<(Option<u32>, Vec<CategoryNode>)> {
+    fn cached_categories(&self) -> Option<(Option<u32>, Arc<Vec<CategoryNode>>)> {
+        self.categories
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|c| c.at.elapsed() < CATEGORY_TTL)
+            .map(|c| (c.class_id, c.tree.clone()))
+    }
+
+    async fn categories(&self, cf: &CurseForge, refresh: bool) -> AppResult<(Option<u32>, Arc<Vec<CategoryNode>>)> {
         if !refresh {
-            if let Some(c) = self.categories.lock().unwrap().as_ref() {
-                if c.at.elapsed() < CATEGORY_TTL {
-                    return Ok((c.class_id, c.tree.clone()));
-                }
+            if let Some(c) = self.cached_categories() {
+                return Ok(c);
+            }
+        }
+        let _single = self.lookup_lock.lock().await;
+        if !refresh {
+            // Another caller may have filled the cache while we waited.
+            if let Some(c) = self.cached_categories() {
+                return Ok(c);
             }
             if let Some(disk) = load_category_disk_cache(&self.cache_dir) {
                 let out = (disk.class_id, disk.tree.clone());
@@ -105,6 +160,7 @@ impl AppState {
         let cats = cf.categories().await?;
         let (class_id, tree) = curseforge::build_category_tree(&cats);
         save_category_disk_cache(&self.cache_dir, class_id, &tree);
+        let tree = Arc::new(tree);
         *self.categories.lock().unwrap() = Some(CategoryCache {
             at: Instant::now(),
             class_id,
@@ -119,7 +175,7 @@ impl AppState {
 struct DiskCategories {
     fetched_at: u64,
     class_id: Option<u32>,
-    tree: serde_json::Value,
+    tree: Vec<CategoryNode>,
 }
 
 fn load_category_disk_cache(cache_dir: &Path) -> Option<CategoryCache> {
@@ -129,20 +185,22 @@ fn load_category_disk_cache(cache_dir: &Path) -> Option<CategoryCache> {
     if age >= CATEGORY_TTL.as_secs() {
         return None;
     }
-    let tree: Vec<CategoryNode> = serde_json::from_value(disk.tree).ok()?;
     Some(CategoryCache {
         at: Instant::now() - Duration::from_secs(age),
         class_id: disk.class_id,
-        tree,
+        tree: Arc::new(disk.tree),
     })
 }
 
 fn save_category_disk_cache(cache_dir: &Path, class_id: Option<u32>, tree: &[CategoryNode]) {
-    let disk = DiskCategories {
-        fetched_at: now_secs(),
-        class_id,
-        tree: serde_json::to_value(tree).unwrap_or_default(),
-    };
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DiskRef<'a> {
+        fetched_at: u64,
+        class_id: Option<u32>,
+        tree: &'a [CategoryNode],
+    }
+    let disk = DiskRef { fetched_at: now_secs(), class_id, tree };
     if let Ok(bytes) = serde_json::to_vec(&disk) {
         let _ = settings::write_atomic(&cache_dir.join("categories.json"), &bytes);
     }
@@ -187,6 +245,9 @@ fn save_settings(
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty())
         .map(|p| wow::normalize_user_path(Path::new(&p)));
+    if s.version_type_override != version_type_override || s.release_channel != release_channel.clamp(1, 3) {
+        state.details.lock().unwrap().clear();
+    }
     s.release_channel = release_channel.clamp(1, 3);
     if s.version_type_override != version_type_override {
         s.version_type_override = version_type_override;
@@ -206,6 +267,7 @@ async fn set_api_key(state: State<'_, AppState>, key: String) -> AppResult<Setti
     settings::set_api_key(&mut s, (!key.is_empty()).then_some(key.as_str()))?;
     s.save(&state.settings_path)?;
     *state.forever_type.lock().unwrap() = None;
+    state.details.lock().unwrap().clear();
     Ok(settings_view(&s))
 }
 
@@ -227,7 +289,7 @@ fn open_addons_folder(app: AppHandle, state: State<'_, AppState>) -> AppResult<(
 // ---------- Browsing commands ----------
 
 #[tauri::command]
-async fn get_categories(state: State<'_, AppState>, refresh: Option<bool>) -> AppResult<Vec<CategoryNode>> {
+async fn get_categories(state: State<'_, AppState>, refresh: Option<bool>) -> AppResult<Arc<Vec<CategoryNode>>> {
     let cf = state.client()?;
     Ok(state.categories(&cf, refresh.unwrap_or(false)).await?.1)
 }
@@ -241,9 +303,11 @@ async fn search_addons(
     index: Option<u32>,
 ) -> AppResult<SearchPage> {
     let cf = state.client()?;
-    let type_id = state.forever_type(&cf).await?;
+    // Both are cached after the first call; on a cold start they run in parallel.
+    let (type_id, cats) = tokio::join!(state.forever_type(&cf), state.categories(&cf, false));
+    let type_id = type_id?;
     // A failed category lookup shouldn't block searching.
-    let class_id = state.categories(&cf, false).await.ok().and_then(|c| c.0);
+    let class_id = cats.ok().and_then(|c| c.0);
     let index = index.unwrap_or(0).min(MAX_SEARCH_WINDOW - PAGE_SIZE);
     let channel = state.settings().release_channel;
     let (mods, pagination) = cf
@@ -296,10 +360,13 @@ struct AddonDetail {
 }
 
 #[tauri::command]
-async fn get_addon_detail(state: State<'_, AppState>, mod_id: u32) -> AppResult<AddonDetail> {
+async fn get_addon_detail(state: State<'_, AppState>, mod_id: u32) -> AppResult<Arc<AddonDetail>> {
+    let channel = state.settings().release_channel;
+    if let Some(hit) = state.details.lock().unwrap().get(mod_id, channel) {
+        return Ok(hit);
+    }
     let cf = state.client()?;
     let type_id = state.forever_type(&cf).await?;
-    let channel = state.settings().release_channel;
     let (m, description, files) = tokio::join!(
         cf.get_mod(mod_id),
         cf.description(mod_id),
@@ -334,7 +401,7 @@ async fn get_addon_detail(state: State<'_, AppState>, mod_id: u32) -> AppResult<
         Err(_) => HashSet::new(),
     };
 
-    Ok(AddonDetail {
+    let detail = Arc::new(AddonDetail {
         addon: AddonSummary::from_mod(&m, type_id, channel),
         screenshots: m.screenshots.clone(),
         description_html: description.unwrap_or_default(),
@@ -357,7 +424,9 @@ async fn get_addon_detail(state: State<'_, AppState>, mod_id: u32) -> AppResult<
             })
             .collect(),
         allow_distribution: m.allow_mod_distribution != Some(false),
-    })
+    });
+    state.details.lock().unwrap().put(mod_id, channel, detail.clone());
+    Ok(detail)
 }
 
 // ---------- Install / update / uninstall ----------
@@ -520,6 +589,8 @@ async fn install_addon(app: AppHandle, state: State<'_, AppState>, mod_id: u32) 
         done.push(entry);
     }
 
+    // Cached pages show dependency install state, so drop them.
+    state.details.lock().unwrap().clear();
     emit(Progress { mod_id, stage: "done", name: "", step: steps, steps, received: 0, total: None });
     Ok(InstallResult { installed: done, warnings })
 }
@@ -539,6 +610,7 @@ async fn uninstall_addon(state: State<'_, AppState>, mod_id: u32) -> AppResult<V
         installer::remove_folders(&addons, &removable)?;
         manifest.remove(&addons, mod_id);
         manifest.save(&state.manifest_file())?;
+        state.details.lock().unwrap().clear();
     }
     Ok(manifest.entries(&addons))
 }
@@ -628,9 +700,28 @@ pub fn run() {
                 http: CurseForge::http_client(),
                 forever_type: Mutex::new(None),
                 categories: Mutex::new(None),
+                details: Mutex::new(DetailCache::default()),
+                lookup_lock: tokio::sync::Mutex::new(()),
                 install_lock: tokio::sync::Mutex::new(()),
             });
+
+            // Warm the version-type and category caches while the window loads,
+            // so the first search needs a single round trip.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = handle.state::<AppState>();
+                if let Ok(cf) = state.client() {
+                    let _ = tokio::join!(state.forever_type(&cf), state.categories(&cf, false));
+                }
+            });
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Let WebView2 release memory while the window is minimized.
+            if let tauri::WindowEvent::Resized(_) = event {
+                let minimized = window.is_minimized().unwrap_or(false);
+                webview_memory::set_low(window, minimized);
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_settings,

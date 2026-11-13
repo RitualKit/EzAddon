@@ -84,6 +84,20 @@ pub async fn download(
     http: &reqwest::Client,
     url: &str,
     dest: &Path,
+    progress: impl FnMut(u64, Option<u64>),
+) -> AppResult<()> {
+    let r = download_inner(http, url, dest, progress).await;
+    if r.is_err() {
+        // Don't leave a partial file behind.
+        let _ = tokio::fs::remove_file(dest).await;
+    }
+    r
+}
+
+async fn download_inner(
+    http: &reqwest::Client,
+    url: &str,
+    dest: &Path,
     mut progress: impl FnMut(u64, Option<u64>),
 ) -> AppResult<()> {
     if let Some(dir) = dest.parent() {
@@ -94,7 +108,8 @@ pub async fn download(
         return Err(AppError::Network(format!("download returned HTTP {}", resp.status())));
     }
     let total = resp.content_length();
-    let mut out = tokio::fs::File::create(dest).await?;
+    // Buffer writes: network chunks are often only a few KB.
+    let mut out = tokio::io::BufWriter::with_capacity(256 * 1024, tokio::fs::File::create(dest).await?);
     let mut received = 0u64;
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
