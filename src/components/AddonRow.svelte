@@ -39,6 +39,9 @@
     display: flex; align-items: center; gap: 14px; padding: 12px 14px;
     background: var(--panel); border-radius: var(--radius); cursor: pointer;
     border: 1px solid transparent; transition: background 0.1s, border-color 0.1s;
+    /* Skip layout and paint for rows scrolled out of view (long result lists stay fast). */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 84px;
   }
   .row-item:hover, .row-item:focus-visible { background: #232329; border-color: #33333a; outline: none; }
   .name-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }

@@ -1,5 +1,16 @@
-<script lang="ts">
+<script lang="ts" module>
   import DOMPurify from "dompurify";
+
+  // Images in descriptions load lazily and decode off the main thread.
+  DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+    if (node.tagName === "IMG") {
+      node.setAttribute("loading", "lazy");
+      node.setAttribute("decoding", "async");
+    }
+  });
+</script>
+
+<script lang="ts">
   import { api, formatBytes, formatCount, formatDate, RELEASE_LABEL, toAppError, type AddonDetail } from "../lib/api";
   import { app } from "../lib/state.svelte";
   import InstallButton from "./InstallButton.svelte";
@@ -7,7 +18,8 @@
 
   let { modId, onclose }: { modId: number; onclose: () => void } = $props();
 
-  let detail = $state<AddonDetail | null>(null);
+  // Raw state: the detail is replaced, never mutated, so it needn't be deeply reactive.
+  let detail = $state.raw<AddonDetail | null>(null);
   let error = $state<string | null>(null);
   let tab = $state<"description" | "files" | "images">("description");
 
@@ -41,7 +53,7 @@
     if (href && /^https?:\/\//i.test(href)) api.openUrl(href);
   }
 
-  const installed = $derived(app.installed.find((a) => a.modId === modId));
+  const installed = $derived(app.installedById[modId]);
 </script>
 
 <svelte:window onkeydown={(e) => e.key === "Escape" && onclose()} />

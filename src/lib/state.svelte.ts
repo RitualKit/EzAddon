@@ -11,6 +11,8 @@ export interface Toast {
 export const app = $state({
   settings: null as SettingsView | null,
   installed: [] as InstalledAddon[],
+  /** modId → installed addon, for O(1) lookups from every list row. */
+  installedById: {} as Record<number, InstalledAddon>,
   /** modId → latest file id, for addons that have an update. */
   updates: {} as Record<number, number>,
   /** modId → live install progress. */
@@ -41,13 +43,14 @@ export function showError(e: unknown) {
   }
 }
 
-export function installedMap(): Map<number, InstalledAddon> {
-  return new Map(app.installed.map((a) => [a.modId, a]));
+function setInstalled(list: InstalledAddon[]) {
+  app.installed = list;
+  app.installedById = Object.fromEntries(list.map((a) => [a.modId, a]));
 }
 
 export async function refreshInstalled() {
   try {
-    app.installed = await api.listInstalled();
+    setInstalled(await api.listInstalled());
   } catch (e) {
     showError(e);
   }
@@ -84,7 +87,7 @@ export async function install(modId: number, name: string, quiet = false): Promi
 
 export async function uninstall(modId: number, name: string) {
   try {
-    app.installed = await api.uninstall(modId);
+    setInstalled(await api.uninstall(modId));
     delete app.updates[modId];
     toast("info", `Removed ${name}.`);
   } catch (e) {
@@ -94,10 +97,9 @@ export async function uninstall(modId: number, name: string) {
 
 export async function updateAll() {
   const ids = Object.keys(app.updates).map(Number);
-  const names = installedMap();
   let ok = 0;
   for (const id of ids) {
-    if (await install(id, names.get(id)?.name ?? `Addon #${id}`, true)) ok++;
+    if (await install(id, app.installedById[id]?.name ?? `Addon #${id}`, true)) ok++;
   }
   toast("success", `Updated ${ok} of ${ids.length} addon${ids.length > 1 ? "s" : ""}.`);
 }

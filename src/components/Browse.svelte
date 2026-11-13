@@ -1,17 +1,18 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { api, formatCount, SORTS, toAppError, type AddonSummary, type CategoryNode } from "../lib/api";
   import { showError } from "../lib/state.svelte";
   import CategoryTree from "./CategoryTree.svelte";
   import AddonRow from "./AddonRow.svelte";
   import Icon from "./Icon.svelte";
 
-  let categories = $state<CategoryNode[]>([]);
+  // Raw state: lists are replaced wholesale, so deep proxies would only cost memory.
+  let categories = $state.raw<CategoryNode[]>([]);
   let categoryId = $state<number | null>(null);
   let query = $state("");
   let sort = $state<number>(2);
 
-  let results = $state<AddonSummary[]>([]);
+  let results = $state.raw<AddonSummary[]>([]);
   let total = $state(0);
   let hasMore = $state(false);
   let loading = $state(false);
@@ -38,7 +39,12 @@
     try {
       const page = await api.search(query, categoryId, sort, reset ? 0 : results.length);
       if (my !== seq) return;
-      results = reset ? page.addons : [...results, ...page.addons.filter((a) => !results.some((r) => r.id === a.id))];
+      if (reset) {
+        results = page.addons;
+      } else {
+        const seen = new Set(results.map((r) => r.id));
+        results = results.concat(page.addons.filter((a) => !seen.has(a.id)));
+      }
       total = page.pagination.totalCount;
       hasMore = page.hasMore;
       if (reset) scroller?.scrollTo({ top: 0 });
@@ -73,6 +79,7 @@
     loadCategories();
     load(true);
   });
+  onDestroy(() => clearTimeout(debounce));
 </script>
 
 <div class="browse">

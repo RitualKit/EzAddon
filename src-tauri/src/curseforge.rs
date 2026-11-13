@@ -328,6 +328,11 @@ impl CurseForge {
             .user_agent(concat!("EzAddon/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(15))
             .timeout(Duration::from_secs(120))
+            // Keep a couple of warm connections for fast browsing, and close
+            // idle ones so nothing lingers in the background.
+            .pool_max_idle_per_host(4)
+            .pool_idle_timeout(Duration::from_secs(60))
+            .tcp_nodelay(true)
             .build()
             .expect("HTTP client")
     }
