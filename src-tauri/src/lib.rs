@@ -719,12 +719,12 @@ pub(crate) async fn compute_updates(state: &AppState) -> AppResult<Vec<UpdateInf
     let installed = Manifest::load(&state.manifest_file()).entries(&addons);
     let current: HashMap<u32, u32> = installed.iter().map(|a| (a.mod_id, a.file_id)).collect();
     let ids: Vec<u32> = current.keys().copied().collect();
-    let mut out = Vec::new();
+    let mut candidates = Vec::new();
     for chunk in ids.chunks(100) {
         for m in cf.get_mods(chunk).await? {
             if let Some(idx) = curseforge::latest_index_for_type(&m, type_id, channel) {
-                if current.get(&m.id).is_some_and(|f| *f != idx.file_id && idx.file_id > *f) {
-                    out.push(UpdateInfo {
+                if current.get(&m.id).is_some_and(|f| idx.file_id > *f) {
+                    candidates.push(UpdateInfo {
                         mod_id: m.id,
                         latest_file_id: idx.file_id,
                         latest_file_name: idx.filename.clone(),
@@ -734,7 +734,28 @@ pub(crate) async fn compute_updates(state: &AppState) -> AppResult<Vec<UpdateInf
             }
         }
     }
-    Ok(out)
+    if candidates.is_empty() {
+        return Ok(candidates);
+    }
+
+    // The stored version can be stale if another tool (e.g. the CurseForge
+    // app) updated the addon. Re-identify the apparently outdated ones from
+    // the files on disk before reporting them. Holding the install lock keeps
+    // this from racing an install that's writing the manifest.
+    let _guard = state.install_lock.lock().await;
+    let mut manifest = Manifest::load(&state.manifest_file());
+    let ids: Vec<u32> = candidates.iter().map(|u| u.mod_id).collect();
+    match scanner::reconcile(&cf, &addons, &mut manifest, &ids).await {
+        Ok(changed) if !changed.is_empty() => {
+            manifest.save(&state.manifest_file())?;
+            state.details.lock().unwrap().clear();
+        }
+        Ok(_) => {}
+        // Can't verify (e.g. offline): report what the record says.
+        Err(e) => eprintln!("couldn't re-check installed versions: {e}"),
+    }
+    candidates.retain(|u| manifest.get(&addons, u.mod_id).is_some_and(|a| u.latest_file_id > a.file_id));
+    Ok(candidates)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

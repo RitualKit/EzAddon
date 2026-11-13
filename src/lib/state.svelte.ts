@@ -76,6 +76,9 @@ export async function checkUpdates(silent = false) {
   try {
     const list = await api.checkUpdates();
     setUpdates(list);
+    // The check re-identifies addons updated by other tools (e.g. the
+    // CurseForge app), so reload the list to show their real versions.
+    await refreshInstalled();
     if (!silent) toast("info", list.length ? `${list.length} update${list.length > 1 ? "s" : ""} available.` : "Everything is up to date.");
   } catch (e) {
     if (!silent) showError(e);
@@ -94,13 +97,12 @@ export async function scanAddons(): Promise<ScanReport | null> {
     app.lastScan = report;
     await refreshInstalled();
     const n = report.added.length;
-    toast(
-      n ? "success" : "info",
-      n
-        ? `Found ${n} addon${n > 1 ? "s" : ""} on CurseForge and added ${n > 1 ? "them" : "it"} to My Addons.`
-        : "No new addons found.",
-    );
-    if (n) await checkUpdates(true);
+    const u = report.updated.length;
+    const parts = [];
+    if (n) parts.push(`added ${n} addon${n > 1 ? "s" : ""}`);
+    if (u) parts.push(`updated ${u} you already had`);
+    toast(n || u ? "success" : "info", parts.length ? `Scan complete: ${parts.join(", ")}.` : "No new addons found.");
+    if (n || u) await checkUpdates(true);
     return report;
   } catch (e) {
     showError(e);

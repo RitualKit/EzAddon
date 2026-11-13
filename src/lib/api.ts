@@ -103,6 +103,8 @@ export interface UpdateInfo {
 
 export interface ScanReport {
   added: InstalledAddon[];
+  /** Addons EzAddon already tracked that gained folders or a newer version. */
+  updated: InstalledAddon[];
   unmatched: string[];
   alreadyManaged: number;
   scanned: number;

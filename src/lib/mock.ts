@@ -155,7 +155,7 @@ const handlers: Record<string, (a: any) => unknown> = {
       { modId: 1006, name: "Leatrix Plus", fileId: 0, fileName: "", displayName: "Unknown version", folders: ["Leatrix_Plus"], installedAt: Date.now() / 1000, thumbnail: pic(6), websiteUrl: null, isDependency: false },
     ].filter((f) => !installed.some((x) => x.modId === f.modId));
     installed = [...installed, ...found];
-    return { added: found, unmatched: found.length ? ["MyOwnTweaks", "!BugGrabber_Old"] : [], alreadyManaged: 1, scanned: 5 };
+    return { added: found, updated: [], unmatched: found.length ? ["MyOwnTweaks", "!BugGrabber_Old"] : [], alreadyManaged: 1, scanned: 5 };
   },
   check_app_update: () => null,
   install_app_update: () => false,

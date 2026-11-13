@@ -11,7 +11,7 @@
 //! Folders that don't match but declare `## X-Curse-Project-ID` in their TOC
 //! are adopted with an unknown version, so they still get update checks.
 
-use crate::curseforge::{latest_index_for_type, CurseForge, File};
+use crate::curseforge::{latest_index_for_type, CurseForge, File, FingerprintMatches};
 use crate::error::{AppError, AppResult};
 use crate::manifest::{InstalledAddon, Manifest};
 use serde::Serialize;
@@ -228,6 +228,8 @@ pub fn toc_project_id(folder: &Path) -> Option<u32> {
 pub struct ScanReport {
     /// Addons newly added to EzAddon.
     pub added: Vec<InstalledAddon>,
+    /// Addons EzAddon already tracked that gained folders or a new version.
+    pub updated: Vec<InstalledAddon>,
     /// Folders that couldn't be matched to CurseForge.
     pub unmatched: Vec<String>,
     /// Folders skipped because EzAddon already manages them.
@@ -328,6 +330,7 @@ pub async fn scan(cf: &CurseForge, addons: &Path, manifest: &mut Manifest, type_
     }
 
     let mut added = Vec::new();
+    let mut updated = Vec::new();
     let mut unmatched: Vec<String> = folders.iter().filter(|f| !claimed.contains_key(&f.name)).map(|f| f.name.clone()).collect();
     for (id, mut folder_names) in by_mod {
         let Some(m) = mods.get(&id) else {
@@ -341,6 +344,16 @@ pub async fn scan(cf: &CurseForge, addons: &Path, manifest: &mut Manifest, type_
             continue;
         }
         folder_names.sort();
+        // Folders of an addon EzAddon already tracks (e.g. a module another
+        // tool added): merge them in instead of replacing the entry.
+        if let Some(existing) = manifest.get(addons, id).cloned() {
+            let merged = merge_entry(&existing, &folder_names, file);
+            if merged != existing {
+                manifest.put(addons, merged.clone());
+                updated.push(merged);
+            }
+            continue;
+        }
         let entry = InstalledAddon {
             mod_id: id,
             name: m.name.clone(),
@@ -358,7 +371,101 @@ pub async fn scan(cf: &CurseForge, addons: &Path, manifest: &mut Manifest, type_
     }
     unmatched.sort_by_key(|n| n.to_lowercase());
     added.sort_by_key(|a| a.name.to_lowercase());
-    Ok(ScanReport { scanned: folders.len() + already_managed, already_managed, added, unmatched })
+    updated.sort_by_key(|a| a.name.to_lowercase());
+    Ok(ScanReport { scanned: folders.len() + already_managed, already_managed, added, updated, unmatched })
+}
+
+/// Adds `new_folders` to an existing entry and, when a fingerprint match
+/// identified the file, records that version. Everything else is kept.
+fn merge_entry(existing: &InstalledAddon, new_folders: &[String], file: Option<&File>) -> InstalledAddon {
+    let mut merged = existing.clone();
+    for f in new_folders {
+        if !merged.folders.iter().any(|x| x.eq_ignore_ascii_case(f)) {
+            merged.folders.push(f.clone());
+        }
+    }
+    merged.folders.sort();
+    if let Some(file) = file {
+        merged.file_id = file.id;
+        merged.file_name = file.file_name.clone();
+        merged.display_name = file.display_name.clone();
+    }
+    merged
+}
+
+/// Of the files CurseForge matched, the one of `mod_id` that shares the most
+/// module fingerprints with the folders on disk. Exact matches win ties, then
+/// the newer file.
+pub fn best_file_for<'a>(mod_id: u32, fingerprints: &[u32], matches: &'a FingerprintMatches) -> Option<&'a File> {
+    let have: HashSet<u64> = fingerprints.iter().map(|f| u64::from(*f)).collect();
+    let exact = matches.exact_matches.iter().map(|h| (h, true));
+    let partial = matches.partial_matches.iter().map(|h| (h, false));
+    exact
+        .chain(partial)
+        .filter(|(h, _)| h.id == mod_id)
+        .map(|(h, is_exact)| {
+            let shared = h.file.modules.iter().filter(|m| have.contains(&m.fingerprint)).count();
+            (shared, is_exact, h.file.id, &h.file)
+        })
+        .filter(|(shared, ..)| *shared > 0)
+        .max_by_key(|(shared, is_exact, id, _)| (*shared, *is_exact, *id))
+        .map(|(.., file)| file)
+}
+
+/// Re-identifies the given tracked addons from the files on disk, so a
+/// version installed or updated by another tool (e.g. the CurseForge app) is
+/// recorded correctly. Returns the mod ids whose record changed.
+pub async fn reconcile(cf: &CurseForge, addons: &Path, manifest: &mut Manifest, mod_ids: &[u32]) -> AppResult<Vec<u32>> {
+    let entries: Vec<InstalledAddon> = mod_ids.iter().filter_map(|id| manifest.get(addons, *id).cloned()).collect();
+    if entries.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Hashing files is blocking work.
+    let dir = addons.to_path_buf();
+    let jobs: Vec<(u32, Vec<String>)> = entries.iter().map(|e| (e.mod_id, e.folders.clone())).collect();
+    let fingerprints: HashMap<u32, Vec<u32>> = tauri::async_runtime::spawn_blocking(move || {
+        jobs.into_iter()
+            .map(|(id, folders)| (id, folders.iter().filter_map(|f| folder_fingerprint(&dir.join(f))).collect()))
+            .collect()
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))?;
+
+    let mut all: Vec<u32> = fingerprints.values().flatten().copied().collect::<HashSet<_>>().into_iter().collect();
+    all.sort_unstable();
+    if all.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut matches = FingerprintMatches::default();
+    for chunk in all.chunks(500) {
+        let m = cf.fingerprint_matches(chunk).await?;
+        matches.exact_matches.extend(m.exact_matches);
+        matches.partial_matches.extend(m.partial_matches);
+    }
+
+    let mut changed = Vec::new();
+    for entry in entries {
+        let fps = fingerprints.get(&entry.mod_id).map(Vec::as_slice).unwrap_or(&[]);
+        let Some(file) = best_file_for(entry.mod_id, fps, &matches) else {
+            continue; // edited by hand or unknown to CurseForge: leave as is
+        };
+        // Module folders of this file that exist on disk but weren't tracked
+        // (added by a newer version), unless another addon owns them.
+        let new_folders: Vec<String> = file
+            .modules
+            .iter()
+            .map(|m| m.name.clone())
+            .filter(|n| crate::installer::is_safe_folder_name(n) && addons.join(n).is_dir())
+            .filter(|n| !manifest.folder_owned_by_other(addons, n, entry.mod_id))
+            .collect();
+        let updated = merge_entry(&entry, &new_folders, Some(file));
+        if updated != entry {
+            manifest.put(addons, updated);
+            changed.push(entry.mod_id);
+        }
+    }
+    Ok(changed)
 }
 
 #[cfg(test)]
@@ -429,6 +536,60 @@ mod tests {
     }
 
     const REFERENCE_FINGERPRINT: u32 = 2_656_195_407;
+
+    use crate::curseforge::{FileModule, FingerprintMatch};
+
+    fn hit(mod_id: u32, file_id: u32, modules: &[(&str, u64)]) -> FingerprintMatch {
+        FingerprintMatch {
+            id: mod_id,
+            file: File {
+                id: file_id,
+                file_name: format!("v{file_id}.zip"),
+                display_name: format!("v{file_id}"),
+                modules: modules.iter().map(|(n, f)| FileModule { name: n.to_string(), fingerprint: *f }).collect(),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn best_file_matches_what_is_on_disk() {
+        let matches = FingerprintMatches {
+            exact_matches: vec![hit(1, 200, &[("A", 10), ("A_Opt", 11)]), hit(2, 900, &[("B", 10)])],
+            partial_matches: vec![hit(1, 150, &[("A", 10), ("A_Opt", 99)]), hit(1, 300, &[("A", 12)])],
+        };
+        // Both modules match file 200 exactly.
+        assert_eq!(best_file_for(1, &[10, 11], &matches).unwrap().id, 200);
+        // Only "A" (fp 10) is on disk: 200 (exact) beats 150 (partial) on a tie.
+        assert_eq!(best_file_for(1, &[10], &matches).unwrap().id, 200);
+        // Fingerprint 12 only belongs to file 300.
+        assert_eq!(best_file_for(1, &[12], &matches).unwrap().id, 300);
+        // Hits for other mods are ignored; nothing shared means no match.
+        assert_eq!(best_file_for(2, &[11], &matches).map(|f| f.id), None);
+        assert_eq!(best_file_for(1, &[77], &matches).map(|f| f.id), None);
+    }
+
+    #[test]
+    fn merge_keeps_entry_and_adds_folders() {
+        let existing = InstalledAddon {
+            mod_id: 1,
+            name: "A".into(),
+            file_id: 100,
+            file_name: "v100.zip".into(),
+            display_name: "v100".into(),
+            folders: vec!["A".into()],
+            installed_at: 42,
+            thumbnail: Some("t".into()),
+            website_url: None,
+            is_dependency: true,
+        };
+        let m = merge_entry(&existing, &["a".into(), "A_New".into()], None);
+        assert_eq!(m.folders, vec!["A", "A_New"]);
+        assert_eq!((m.file_id, m.installed_at, m.is_dependency, m.thumbnail.as_deref()), (100, 42, true, Some("t")));
+        let f = hit(1, 200, &[]).file;
+        let m = merge_entry(&existing, &[], Some(&f));
+        assert_eq!((m.file_id, m.display_name.as_str(), m.folders.len()), (200, "v200", 1));
+    }
 }
 
 /// Live check against the real API, run by hand:
@@ -450,5 +611,50 @@ mod live {
         }
         println!("UNMATCHED {:?}; scanned {}", report.unmatched, report.scanned);
         assert!(!report.added.is_empty());
+    }
+}
+
+/// Live check of `reconcile`, run by hand with an AddOns folder holding the
+/// latest Simulationcraft and EllesmereUI:
+/// `EZADDON_LIVE_ADDONS=/path/to/AddOns cargo test live_reconcile -- --ignored --nocapture`
+#[cfg(test)]
+mod live_reconcile {
+    use super::*;
+
+    fn stale(mod_id: u32, file_id: u32, folders: &[&str]) -> InstalledAddon {
+        InstalledAddon {
+            mod_id,
+            name: format!("mod {mod_id}"),
+            file_id,
+            file_name: "old.zip".into(),
+            display_name: "old".into(),
+            folders: folders.iter().map(|s| s.to_string()).collect(),
+            installed_at: 1,
+            thumbnail: None,
+            website_url: None,
+            is_dependency: false,
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_reconcile() {
+        let dir = PathBuf::from(std::env::var("EZADDON_LIVE_ADDONS").expect("set EZADDON_LIVE_ADDONS"));
+        let cf = CurseForge::new(CurseForge::http_client(), "proxy-injected".into());
+        let mut manifest = Manifest::default();
+        // Recorded as older versions, as if another tool updated them since.
+        manifest.put(&dir, stale(82745, 1, &["Simulationcraft"]));
+        manifest.put(&dir, stale(1477613, 2, &["EllesmereUI"]));
+        let changed = reconcile(&cf, &dir, &mut manifest, &[82745, 1477613]).await.unwrap();
+        for e in manifest.entries(&dir) {
+            println!("{} -> file {} ({}) folders {}", e.mod_id, e.file_id, e.display_name, e.folders.len());
+        }
+        assert_eq!(changed.len(), 2);
+        assert_eq!(manifest.get(&dir, 82745).unwrap().file_id, 9463839);
+        let ell = manifest.get(&dir, 1477613).unwrap();
+        assert_eq!(ell.file_id, 9538255);
+        assert!(ell.folders.len() > 20, "module folders merged: {:?}", ell.folders);
+        // Running again changes nothing.
+        assert!(reconcile(&cf, &dir, &mut manifest, &[82745, 1477613]).await.unwrap().is_empty());
     }
 }

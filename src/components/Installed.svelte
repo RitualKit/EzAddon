@@ -65,13 +65,13 @@
   </div>
 
   <div class="table scroll">
-    {#if app.lastScan && (app.lastScan.added.length || app.lastScan.unmatched.length)}
+    {#if app.lastScan && (app.lastScan.added.length || app.lastScan.updated.length || app.lastScan.unmatched.length)}
       {@const r = app.lastScan}
       <div class="scan-result">
         <div class="row">
           <span class="grow">
             Scanned {r.scanned} addon folder{r.scanned === 1 ? "" : "s"}:
-            <strong>{r.added.length} added</strong>{#if r.unmatched.length}, {r.unmatched.length} not found on CurseForge{/if}.
+            <strong>{r.added.length} added</strong>{#if r.updated.length}, {r.updated.length} updated{/if}{#if r.unmatched.length}, {r.unmatched.length} not found on CurseForge{/if}.
           </span>
           {#if r.unmatched.length}
             <button class="ghost small" onclick={() => (showUnmatched = !showUnmatched)}>{showUnmatched ? "Hide" : "Show"} not found</button>
