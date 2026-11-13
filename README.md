@@ -48,7 +48,13 @@ EzAddon is built to stay light:
 - **Checked for leaks.** `scripts/leak-test.cjs` runs 240 browse / addon page / search / tab cycles and measures after forced garbage collection.
   - DOM nodes and event listeners stay exactly flat.
   - The JS heap levels off at about 3.8 MB.
-- **Measured on Windows.** Every CI build launches the real app on a Windows runner and records memory use (app plus WebView2 processes, active and minimized) in the run summary of the **Build** workflow.
+- **Measured on Windows.** Every CI build launches the real app on a Windows runner (`scripts/measure-memory.ps1`) and records its memory use in the **Build** workflow's run summary. The latest results:
+
+  | | EzAddon process | App + all WebView2 processes |
+  |---|---|---|
+  | Private memory (what Task Manager counts) | 4.9 MB | **~105 MB** |
+  | Working set (includes DLLs shared with Edge/Windows) | 30 MB | ~315 MB active, ~275 MB minimized |
+  | CPU while idle | | 0.04 % |
 
 ## How installs work
 
